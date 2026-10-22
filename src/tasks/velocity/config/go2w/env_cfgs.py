@@ -1,17 +1,23 @@
-"""Go2W velocity tasks with the G1 MID360 sensing curriculum.
+"""Go2W velocity tasks built from the common velocity environment root.
 
-All rough/perceptive variants share observation/action dimensions, including
-three actor history frames, so their Go2W checkpoints can be resumed directly.
+All registered variants start at the same private Go2W builder instead of
+calling another task factory. Rough/perceptive variants share observation and
+action dimensions, including three actor history frames.
 """
 
 from copy import deepcopy
 from dataclasses import replace
+from typing import Literal
 
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs import mdp as envs_mdp
 from mjlab.envs.mdp.actions import JointPositionActionCfg, JointVelocityActionCfg
+from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
+from mjlab.tasks.velocity.mdp.terminations import illegal_contact
 from mjlab.terrains.config import ROUGH_TERRAINS_CFG
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
@@ -20,9 +26,8 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   WHEEL_GEOMS, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
 )
 from src.tasks.velocity import mdp
-from src.tasks.velocity.config.go2.env_cfgs import unitree_go2_rough_env_cfg
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
-from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg
+from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
 
 SCAN = {
   "size_x_m": 1.6, "size_y_m": 1.0, "resolution_m": 0.1,
@@ -63,29 +68,48 @@ def _terrain_cfg(play: bool, perceptive: bool = False, stepup: bool = False):
   return terrain
 
 
-def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2_rough_env_cfg(play=play)
+def _make_go2w_env_cfg(
+  play: bool,
+  *,
+  stage: Literal["flat", "rough", "v1", "v2", "stepup", "step14"],
+) -> ManagerBasedRlEnvCfg:
+  """Build each variant from the shared root and explicit Go2W settings."""
+  cfg = make_velocity_env_cfg()
+  perceptive = stage not in ("flat", "rough")
+  stepup = stage in ("stepup", "step14")
   cfg.scene.entities = {"robot": get_go2w_robot_cfg()}
   cfg.sim.nconmax = 128
   cfg.sim.njmax = 2048
   cfg.sim.mujoco.ccd_iterations = 50
   cfg.sim.contact_sensor_maxmatch = 128
-  cfg.scene.terrain.terrain_generator = _terrain_cfg(play)
+  cfg.scene.terrain.terrain_generator = _terrain_cfg(play, perceptive=perceptive, stepup=stepup)
   cfg.scene.terrain.max_init_terrain_level = 0
 
   for sensor in cfg.scene.sensors:
     if sensor.name == "terrain_scan":
       assert isinstance(sensor, RayCastSensorCfg)
+      sensor.frame.name = "base_link"
       sensor.include_geom_groups = (0, 1)
       # Dense and sparse observations refer to exactly the same grid cells.
       sensor.pattern = OffsetGridPatternCfg(
         size=(SCAN["size_x_m"], SCAN["size_y_m"]), resolution=SCAN["resolution_m"],
         x_offset=SCAN["x_offset_m"], y_offset=SCAN["y_offset_m"],
       )
-    elif sensor.name == "feet_ground_contact":
-      sensor.primary = ContactMatch(mode="geom", pattern=WHEEL_GEOMS, entity="robot")
-    elif sensor.name == "nonfoot_ground_touch":
-      sensor.primary.exclude = WHEEL_GEOMS
+
+  feet_ground_cfg = ContactSensorCfg(
+    name="feet_ground_contact",
+    primary=ContactMatch(mode="geom", pattern=WHEEL_GEOMS, entity="robot"),
+    secondary=ContactMatch(mode="body", pattern="terrain"),
+    fields=("found", "force"), reduce="netforce", num_slots=1, track_air_time=True,
+  )
+  nonfoot_ground_cfg = ContactSensorCfg(
+    name="nonfoot_ground_touch",
+    primary=ContactMatch(
+      mode="geom", entity="robot", pattern=r".*_collision\d*$", exclude=WHEEL_GEOMS,
+    ),
+    secondary=ContactMatch(mode="body", pattern="terrain"),
+    fields=("found", "force"), reduce="none", num_slots=1, history_length=4,
+  )
 
   # Keep the existing netforce sensor for observations/landing rewards. Raw
   # contact slots let wheel_spin_contact sum normal reactions without friction.
@@ -95,7 +119,7 @@ def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     secondary=ContactMatch(mode="body", pattern="terrain"),
     fields=("force", "normal"), reduce="none", num_slots=8,
   )
-  cfg.scene.sensors += (wheel_spin_contact_cfg,)
+  cfg.scene.sensors += (feet_ground_cfg, nonfoot_ground_cfg, wheel_spin_contact_cfg)
 
   cfg.actions = {
     "joint_pos": JointPositionActionCfg(
@@ -121,12 +145,30 @@ def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.observations["critic"].terms["foot_height"].params["asset_cfg"].site_names = WHEEL_SITES
   cfg.events["foot_friction"].params["asset_cfg"].geom_names = WHEEL_GEOMS
   cfg.events["encoder_bias"].params["asset_cfg"].joint_names = LEG_JOINTS
+  cfg.events["base_com"].params["asset_cfg"].body_names = ("base_link",)
   cfg.events["base_com"].params["ranges"] = {
     0: (-0.03, 0.03), 1: (-0.02, 0.02), 2: (-0.02, 0.02),
   }
 
   for term in ("pose", "stand_still", "joint_pos_limits", "joint_acc_l2"):
     cfg.rewards[term].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["pose"].params["std_standing"] = {
+    r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
+    r".*(FR|FL|RR|RL)_thigh_joint.*": 0.1,
+    r".*(FR|FL|RR|RL)_calf_joint.*": 0.15,
+  }
+  cfg.rewards["pose"].params["std_walking"] = {
+    r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
+    r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
+    r".*(FR|FL|RR|RL)_calf_joint.*": 0.5,
+  }
+  cfg.rewards["pose"].params["std_running"] = {
+    r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
+    r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
+    r".*(FR|FL|RR|RL)_calf_joint.*": 0.5,
+  }
+  cfg.rewards["body_orientation_l2"].params["asset_cfg"].body_names = ("base_link",)
+  cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("base_link",)
   # Gait phase and mandatory foot clearance conflict with continuous rolling.
   for term in ("foot_gait", "foot_clearance", "foot_slip"):
     cfg.rewards.pop(term)
@@ -152,6 +194,10 @@ def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.rewards["pose"].weight = 0.5
   cfg.rewards["body_orientation_l2"].weight = -1.5
   cfg.rewards["action_rate_l2"].weight = -0.03
+  cfg.terminations["illegal_contact"] = TerminationTermCfg(
+    func=illegal_contact,
+    params={"sensor_name": nonfoot_ground_cfg.name, "force_threshold": 10.0},
+  )
 
   twist = cfg.commands["twist"]
   twist.rel_standing_envs = 0.05
@@ -166,35 +212,44 @@ def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       {"step": 4000 * 24, "lin_vel_x": (-0.2, 1.0), "lin_vel_y": (0.0, 0.0), "ang_vel_z": (-0.4, 0.4)},
       {"step": 9000 * 24, "lin_vel_x": (-0.3, 1.2), "lin_vel_y": (0.0, 0.0), "ang_vel_z": (-0.6, 0.6)},
     ]
+  cfg.viewer.body_name = "base_link"
   cfg.viewer.distance = 2.0
+  cfg.viewer.elevation = -10.0
+
+  if play:
+    cfg.episode_length_s = int(1e9)
+    cfg.observations["actor"].enable_corruption = False
+    cfg.events.pop("push_robot", None)
+    cfg.curriculum = {}
+    cfg.events["randomize_terrain"] = EventTermCfg(
+      func=envs_mdp.randomize_terrain, mode="reset", params={},
+    )
+
+  if perceptive:
+    _configure_perception(cfg, play=play, version=1 if stage == "v1" else 2)
+  if stepup:
+    _configure_stepup(cfg, play=play)
+  if stage == "step14":
+    _configure_step14(cfg)
+  if stage == "flat":
+    cfg.scene.terrain.terrain_type = "plane"
+    cfg.scene.terrain.terrain_generator = None
+    cfg.scene.sensors = tuple(s for s in cfg.scene.sensors if s.name != "terrain_scan")
+    for group in cfg.observations.values():
+      group.terms.pop("height_scan")
+    cfg.curriculum.pop("terrain_levels", None)
+    cfg.events.pop("randomize_terrain", None)
   return cfg
 
 
-def unitree_go2w_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2w_rough_env_cfg(play)
-  cfg.scene.terrain.terrain_type = "plane"
-  cfg.scene.terrain.terrain_generator = None
-  cfg.scene.sensors = tuple(s for s in cfg.scene.sensors if s.name != "terrain_scan")
-  for group in cfg.observations.values():
-    group.terms.pop("height_scan")
-  cfg.curriculum.pop("terrain_levels", None)
-  cfg.events.pop("randomize_terrain", None)
-  return cfg
-
-
-def unitree_go2w_perceptive_rough_v1_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2w_rough_env_cfg(play)
-  cfg.scene.terrain.terrain_generator = _terrain_cfg(play, perceptive=True)
+def _configure_perception(cfg: ManagerBasedRlEnvCfg, *, play: bool, version: int) -> None:
+  """Apply a sensing stage to a fresh Go2W config, without calling a task."""
   scan = cfg.observations["actor"].terms["height_scan"]
   scan.noise = Unoise(n_min=-0.08, n_max=0.08)
   scan.delay_max_lag = 0 if play else 1
-  return cfg
-
-
-def unitree_go2w_perceptive_rough_v2_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2w_perceptive_rough_v1_env_cfg(play)
+  if version == 1:
+    return
   dense = next(s for s in cfg.scene.sensors if s.name == "terrain_scan")
-  scan = cfg.observations["actor"].terms["height_scan"]
   scan.func = mdp.bridged_mid360_height_scan_memory()
   scan.params = {
     # Both views share rays; the memory term applies visibility and sparsity.
@@ -211,12 +266,9 @@ def unitree_go2w_perceptive_rough_v2_env_cfg(play: bool = False) -> ManagerBased
   scan.delay_max_lag = 0 if play else 2
   scan.delay_hold_prob = 0.0 if play else 0.35
   scan.delay_update_period = 0 if play else 3
-  return cfg
 
 
-def unitree_go2w_perceptive_stepup_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2w_perceptive_rough_v2_env_cfg(play)
-  cfg.scene.terrain.terrain_generator = _terrain_cfg(play, perceptive=True, stepup=True)
+def _configure_stepup(cfg: ManagerBasedRlEnvCfg, *, play: bool) -> None:
   cfg.commands["twist"].rel_standing_envs = 0.02
   cfg.commands["twist"].ranges.lin_vel_x = (0.15, 0.45)
   cfg.commands["twist"].ranges.ang_vel_z = (0.0, 0.0)
@@ -224,11 +276,9 @@ def unitree_go2w_perceptive_stepup_env_cfg(play: bool = False) -> ManagerBasedRl
     cfg.curriculum["command_vel"].params["velocity_stages"] = [
       {"step": 0, "lin_vel_x": (0.15, 0.45), "lin_vel_y": (0.0, 0.0), "ang_vel_z": (0.0, 0.0)},
     ]
-  return cfg
 
 
-def unitree_go2w_perceptive_step14_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  cfg = unitree_go2w_perceptive_stepup_env_cfg(play)
+def _configure_step14(cfg: ManagerBasedRlEnvCfg) -> None:
   generator = cfg.scene.terrain.terrain_generator
   for name, sub in generator.sub_terrains.items():
     if name == "pyramid_stairs_inv":
@@ -238,4 +288,27 @@ def unitree_go2w_perceptive_step14_env_cfg(play: bool = False) -> ManagerBasedRl
   generator.num_rows = generator.num_cols = 1
   generator.curriculum = False
   cfg.curriculum.pop("terrain_levels", None)
-  return cfg
+
+
+def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="rough")
+
+
+def unitree_go2w_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="flat")
+
+
+def unitree_go2w_perceptive_rough_v1_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="v1")
+
+
+def unitree_go2w_perceptive_rough_v2_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="v2")
+
+
+def unitree_go2w_perceptive_stepup_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="stepup")
+
+
+def unitree_go2w_perceptive_step14_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  return _make_go2w_env_cfg(play, stage="step14")

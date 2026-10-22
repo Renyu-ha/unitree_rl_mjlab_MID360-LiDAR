@@ -3,9 +3,11 @@
 Run from the repository root: python -m unittest discover -s tests -v
 """
 
+import ast
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import mujoco
 import torch
@@ -19,6 +21,7 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
 )
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
+from src.tasks.velocity.config.go2w import env_cfgs as go2w_env_cfgs
 
 
 class Go2WTests(unittest.TestCase):
@@ -26,6 +29,35 @@ class Go2WTests(unittest.TestCase):
   def setUpClass(cls):
     cls.robot = Entity(get_go2w_robot_cfg())
     cls.model = cls.robot.spec.compile()
+
+  def test_go2w_configs_do_not_import_other_task_configs(self):
+    config_dir = Path(go2w_env_cfgs.__file__).parent
+    for path in config_dir.glob("*.py"):
+      for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        modules = []
+        if isinstance(node, ast.ImportFrom):
+          modules = [node.module or ""]
+        elif isinstance(node, ast.Import):
+          modules = [alias.name for alias in node.names]
+        for module in modules:
+          if module.startswith("src.tasks.velocity.config."):
+            self.assertTrue(module.startswith("src.tasks.velocity.config.go2w."), (path.name, module))
+          self.assertFalse(module.startswith("mjlab.tasks.") and ".config." in module, (path.name, module))
+
+  def test_registered_variants_do_not_chain_task_factories(self):
+    factories = {
+      name: value for name, value in vars(go2w_env_cfgs).items()
+      if name.startswith("unitree_go2w_") and name.endswith("_env_cfg")
+    }
+    self.assertEqual(len(factories), 6)
+    blocked = {name: Mock(side_effect=AssertionError(f"Task factory reused: {name}")) for name in factories}
+    with patch.multiple(go2w_env_cfgs, **blocked):
+      for name, factory in factories.items():
+        for play in (False, True):
+          with self.subTest(task=name, play=play):
+            cfg = factory(play=play)
+            self.assertIn("robot", cfg.scene.entities)
+            self.assertEqual(tuple(cfg.actions), ("joint_pos", "wheel_vel"))
 
   def test_morphology_and_control_modes(self):
     model = self.model

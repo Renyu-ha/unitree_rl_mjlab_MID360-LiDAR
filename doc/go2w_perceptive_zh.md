@@ -81,6 +81,8 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 - `src/tasks/velocity/mdp/wheel_rewards.py`：滚动接触和停车奖励。
 - `src/tasks/velocity/rl/go2w_runner.py`：混合动作 ONNX 元数据。
 
+Go2W 配置直接从公共根层构建：环境以 `make_velocity_env_cfg()` 为起点，在 Go2W 模块内显式配置传感器、默认姿态约束、事件和终止条件；PPO 直接实例化 mjlab 的 `RslRlOnPolicyRunnerCfg`、`RslRlModelCfg`、`RslRlPpoAlgorithmCfg`。六个已注册任务均调用 Go2W 私有基础构建器，通过局部配置函数应用感知与地形阶段，不导入 Go2/G1 等其他机器人的 task 配置，也不串接已注册 task 的工厂函数。
+
 接触打滑采用本地 `robot_lab`（检查时 HEAD 为 `1a8193f`）中 `source/loco_lab/loco_lab/tasks/physx/mdp/rewards/rewards.py::wheel_spin_contact` 的定义；该文件的版权与 Apache-2.0 标识保留在迁移文件头部。此处做了 mjlab 数据接口适配，公式为：
 
 ```text
@@ -171,9 +173,10 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 
 2026-10-22 本地验证结果（Windows、CPU、隔离 Python 环境）：
 
-- 11 项回归检查全部通过，包含与 robot_lab 数值用例对齐、接触力阈值、多接触法向力求和及摩擦力排除；Go2W 完整 mjlab 实体可编译为 23 维 `qpos`、22 维 `qvel`、16 个执行器。
+- 13 项回归检查全部通过，包含配置独立性、任务工厂不串接、与 robot_lab 数值用例对齐、接触力阈值、多接触法向力求和及摩擦力排除；Go2W 完整 mjlab 实体可编译为 23 维 `qpos`、22 维 `qvel`、16 个执行器。
 - Flat 和感知 v2：各 2 个环境，完成重置、仿真步进、1 次 PPO 更新、checkpoint 和 ONNX 导出。实测 v2 观测形状为 Actor `(2, 726)`、Critic `(2, 269)`。
 - 固定 14 cm 台阶任务：加载 v2 checkpoint，在最终稀疏阶段完成步进和 1 次 PPO 更新；高度图记忆填充指标正常产生。
 - 正式 `scripts/train.py` 入口以 2 个环境、1 次迭代跑通配置解析、配置保存、训练及导出；随后通过该入口加载 v2 checkpoint，在 StepUp-Finetune 继续完成 1 次更新。
 - 当前机器无可用 NVIDIA CUDA 驱动，未进行 GPU 性能验证、完整收敛训练或真机测试。上述冒烟模型仅用于验证程序链路，不是可部署的训练成果。
 - 替换为 robot_lab 接触空转奖励后，重新通过 11 项回归检查，并在 2 个环境、最终稀疏感知阶段完成 8 步仿真、1 次 PPO 更新和 ONNX 校验；观测及动作维度保持兼容。
+- 移除 Go2 任务配置依赖后，逐项对比六个任务的训练环境、回放环境及 PPO 配置，共 18 组完整配置与修改前完全一致；另在 2 个环境、最终稀疏感知阶段加载已有 checkpoint，完成 8 步仿真、1 次 PPO 更新及 ONNX 校验。
