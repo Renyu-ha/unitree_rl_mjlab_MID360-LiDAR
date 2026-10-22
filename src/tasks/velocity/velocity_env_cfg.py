@@ -35,7 +35,7 @@ import src.tasks.velocity.mdp as mdp
 
 
 @dataclass
-class OffsetGridPatternCfg:
+class OffsetGridPatternCfg(GridPatternCfg):
   """Grid ray pattern with a fixed local XY offset.
 
   This keeps the number and order of rays identical to ``GridPatternCfg`` while

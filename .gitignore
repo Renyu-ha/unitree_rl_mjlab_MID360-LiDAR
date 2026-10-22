@@ -15,5 +15,6 @@ simulate/build
 __pycache__/
 *.pyc
 *.pyo
+.validation/
 .codex
 **/params/*.npz

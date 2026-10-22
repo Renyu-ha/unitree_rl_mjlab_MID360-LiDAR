@@ -19,7 +19,17 @@
 - **三阶段训练流程**：盲走预训练 → 感知粗糙地形 v1/v2 → 爬台阶精调，每阶段可加载前阶段 checkpoint 继续训练
 - **完整 Sim2Real 链路**：支持 MuJoCo 仿真验证 → unitree_mujoco 硬件接口仿真 → 实机部署
 
-支持机器人：**Go2、A2、As2、G1（29DOF）、G1-23DOF、H1\_2、H2、R1**
+支持机器人：**Go2、Go2W（轮腿训练）、A2、As2、G1（29DOF）、G1-23DOF、H1\_2、H2、R1**
+
+### Go2W 感知训练迁移
+
+Go2W 使用 12 个腿关节位置动作和 4 个轮子速度动作，支持粗糙地形、MID360 感知 v1/v2、上台阶精调和固定 14 cm 台阶回放。仓库感知运控解析、迁移细节及完整命令见 [Go2W 迁移说明](doc/go2w_perceptive_zh.md)。
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 --env.scene.num-envs=4096
+```
+
+该入口包含密集到稀疏的感知课程，可从头训练；Go2/G1 或 Go2W Flat 的权重不能直接加载到 Go2W 感知任务。Go2W 实机控制程序不在此次迁移范围内。
 
 ---
 
