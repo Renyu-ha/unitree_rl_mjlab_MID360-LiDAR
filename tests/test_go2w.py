@@ -14,13 +14,14 @@ from unittest.mock import Mock, patch
 
 import torch
 import mujoco
+import numpy as np
 from mjlab.entity import Entity
 from mjlab.sensor import ContactSensorCfg, GridPatternCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 
 import src.tasks  # noqa: F401 -- register repository tasks
 from src.assets.robots.unitree_go2w.go2w_constants import (
-  GO2W_XML, LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg,
+  GO2W_XML, LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg, get_spec,
 )
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
@@ -38,6 +39,8 @@ class Go2WTests(unittest.TestCase):
     manifest = json.loads((folder / "model_source.json").read_text(encoding="utf-8"))
     self.assertEqual(manifest["repository"], "ZhongL1/unitree_rl_mjlab_go2w")
     self.assertEqual(manifest["commit"], "fe0deeaef2e6e579db63b782f1082b5d2b4ed071")
+    self.assertEqual(GO2W_XML.name, manifest["source_xml_file"])
+    self.assertEqual(GO2W_XML.name, manifest["active_xml_file"])
     files = [(manifest["source_xml_file"], manifest["source_xml_git_blob"], None)]
     files.extend((mesh["file"], mesh["git_blob"], mesh["size"]) for mesh in manifest["meshes"])
     for filename, expected_hash, expected_size in files:
@@ -47,45 +50,41 @@ class Go2WTests(unittest.TestCase):
         self.assertEqual(hashlib.sha1(blob).hexdigest(), expected_hash)
         if expected_size is not None:
           self.assertEqual(len(payload), expected_size)
-    mesh_paths = [mesh.get("file") for mesh in ET.parse(GO2W_XML).findall("asset/mesh")]
+    root = ET.parse(GO2W_XML).getroot()
+    meshdir = Path(root.find("compiler").get("meshdir", ""))
+    mesh_paths = [(meshdir / mesh.get("file")).as_posix() for mesh in root.findall("asset/mesh")]
     self.assertEqual(mesh_paths, [mesh["file"] for mesh in manifest["meshes"]])
     self.assertEqual(len(mesh_paths), 17)
     self.assertTrue(all(Path(path).parent == Path("assets") for path in mesh_paths))
     # Loading the active XML itself must work without the other robot folders
     # or the asset injection performed by Entity/get_spec().
     standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 17, 4))
+    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 17, 53))
 
   def test_reference_model_physical_structure_is_preserved(self):
-    folder = GO2W_XML.parent
-    source = ET.parse(folder / "go2w.source.xml").getroot()
-    active = ET.parse(GO2W_XML).getroot()
-    self.assertEqual(
-      ET.canonicalize(ET.tostring(source.find("default")), strip_text=True),
-      ET.canonicalize(ET.tostring(active.find("default")), strip_text=True),
+    before = GO2W_XML.read_bytes()
+    raw = mujoco.MjModel.from_xml_path(str(GO2W_XML))
+    adapted = get_spec().compile()
+    # Check the adapter before Entity applies the existing controller/contact
+    # configuration. The adapter must not redefine any physical parameters.
+    fields = (
+      "body_pos", "body_quat", "body_ipos", "body_iquat", "body_mass", "body_inertia",
+      "jnt_type", "jnt_pos", "jnt_axis", "jnt_range", "jnt_limited",
+      "dof_armature", "dof_damping", "dof_frictionloss",
+      "geom_type", "geom_size", "geom_pos", "geom_quat", "geom_dataid",
+      "geom_friction", "geom_condim", "geom_priority", "geom_margin", "geom_solref", "geom_solimp",
+      "mesh_vert", "mesh_face",
     )
-    source_bodies = source.findall(".//worldbody//body")
-    active_bodies = active.findall(".//worldbody//body")
-    self.assertEqual(len(source_bodies), len(active_bodies))
-    for original, adapted in zip(source_bodies, active_bodies, strict=True):
-      with self.subTest(body=original.get("name")):
-        self.assertEqual(original.attrib, adapted.attrib)
-        self.assertEqual(original.find("inertial").attrib, adapted.find("inertial").attrib)
-        self.assertEqual(len(original.findall("joint")), len(adapted.findall("joint")))
-        for joint, adapted_joint in zip(original.findall("joint"), adapted.findall("joint"), strict=True):
-          attrs = dict(adapted_joint.attrib)
-          if "wheel" in joint.get("name", ""):
-            self.assertEqual(attrs.pop("limited"), "false")
-          self.assertEqual(joint.attrib, attrs)
-        self.assertEqual(len(original.findall("geom")), len(adapted.findall("geom")))
-        for geom, adapted_geom in zip(original.findall("geom"), adapted.findall("geom"), strict=True):
-          attrs = dict(adapted_geom.attrib)
-          attrs.pop("name", None)
-          # A decorative wheel mesh duplicates the physical mesh upstream;
-          # keep the existing visual-only classification in the local adapter.
-          if original.get("name", "").endswith("_wheel_link") and geom.get("class") is None:
-            self.assertEqual(attrs.pop("class"), "visual")
-          self.assertEqual(geom.attrib, attrs)
+    for field in fields:
+      with self.subTest(field=field):
+        np.testing.assert_array_equal(getattr(raw, field), getattr(adapted, field))
+    # Keep all upstream telemetry, with four extra task-specific sensor names.
+    self.assertEqual(adapted.nsensor, raw.nsensor + 4)
+    for sensor_id in range(raw.nsensor):
+      self.assertEqual(adapted.sensor(sensor_id).name, raw.sensor(sensor_id).name)
+      np.testing.assert_array_equal(adapted.sensor(sensor_id).type, raw.sensor(sensor_id).type)
+      np.testing.assert_array_equal(adapted.sensor(sensor_id).objid, raw.sensor(sensor_id).objid)
+    self.assertEqual(GO2W_XML.read_bytes(), before)
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
@@ -119,6 +118,7 @@ class Go2WTests(unittest.TestCase):
   def test_go2w_configurations_are_explicit_without_loops(self):
     paths = list(Path(go2w_env_cfgs.__file__).parent.glob("*.py"))
     paths.append(Path(__file__).parents[1] / "src/assets/robots/unitree_go2w/go2w_constants.py")
+    paths.append(Path(__file__).parents[1] / "src/assets/robots/unitree_go2w/model_adapter.py")
     loops = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
     for path in paths:
       for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):

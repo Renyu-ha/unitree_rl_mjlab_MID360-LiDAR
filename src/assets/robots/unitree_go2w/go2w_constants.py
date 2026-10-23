@@ -1,4 +1,4 @@
-"""Go2W asset settings aligned with ZhongL1/unitree_rl_mjlab_go2w.
+"""Load the original ZhongL1 Go2W model with this task's actuator settings.
 
 See SOURCE.md for the pinned reference and mjlab 1.2.0 compatibility adapters.
 The reference configuration is distributed under Apache-2.0.
@@ -13,6 +13,7 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.utils.os import update_assets
 from mjlab.utils.spec_config import CollisionCfg
 
+from .model_adapter import bind_task_interfaces
 from .wheel_actuator import WheelVelocityActuatorCfg
 
 GO2W_XML = Path(__file__).parent / "xmls" / "go2w.xml"
@@ -31,6 +32,7 @@ WHEEL_ACTION_SCALE = 20.0  # radians/second
 
 
 def get_spec() -> mujoco.MjSpec:
+  # Load the verbatim ZhongL1 XML, not a locally rewritten model.
   spec = mujoco.MjSpec.from_file(str(GO2W_XML))
   # All 17 reference meshes are local to this model, including OBJ visuals.
   # The XML also loads directly without depending on another robot's assets.
@@ -40,6 +42,7 @@ def get_spec() -> mujoco.MjSpec:
     assets, GO2W_XML.parent / "assets", "assets", glob="*.obj",
   )
   spec.assets = assets
+  bind_task_interfaces(spec)
   return spec
 
 

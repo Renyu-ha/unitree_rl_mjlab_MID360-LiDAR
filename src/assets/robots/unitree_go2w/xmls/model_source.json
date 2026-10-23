@@ -2,9 +2,10 @@
   "repository": "ZhongL1/unitree_rl_mjlab_go2w",
   "commit": "fe0deeaef2e6e579db63b782f1082b5d2b4ed071",
   "source_xml_path": "mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml",
-  "source_xml_file": "go2w.source.xml",
+  "source_xml_file": "go2w.xml",
   "source_xml_git_blob": "ae8ab3e32e3043e06752009fdd33be20d74ccc85",
   "active_xml_file": "go2w.xml",
+  "interface_adapter": "../model_adapter.py:bind_task_interfaces",
   "meshes": [
     {
       "file": "assets/base_0.obj",
