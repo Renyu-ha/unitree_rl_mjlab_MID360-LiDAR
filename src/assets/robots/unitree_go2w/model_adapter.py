@@ -1,6 +1,6 @@
 """Bind the unmodified upstream Go2W model to this task's mjlab interfaces.
 
-The XML and meshes remain verbatim upstream files. This adapter adds names,
+The XML and meshes remain verbatim upstream files. This adapter binds names,
 wheel-hub sites and task sensors; it does not define link geometry or inertias.
 """
 
@@ -16,6 +16,50 @@ def _bind_wheel(spec: mujoco.MjSpec, leg: str, lateral: float) -> None:
   body.geoms[0].conaffinity = 0
   body.geoms[0].group = 2
   body.add_site(name=leg, pos=(0.0, lateral, 0.0), size=(0.01, 0.005, 0.005), group=5)
+
+
+def _drop_joint_telemetry(spec: mujoco.MjSpec, name: str) -> None:
+  # Training reads these values from qpos/qvel/actuator data, not XML sensors.
+  spec.delete(spec.sensor(f"{name}_pos"))
+  spec.delete(spec.sensor(f"{name}_vel"))
+  spec.delete(spec.sensor(f"{name}_torque"))
+
+
+def _bind_task_sensors(spec: mujoco.MjSpec) -> None:
+  """Remove unused telemetry in memory; retain the three consumed sensors."""
+  _drop_joint_telemetry(spec, "FR_hip")
+  _drop_joint_telemetry(spec, "FR_thigh")
+  _drop_joint_telemetry(spec, "FR_calf")
+  _drop_joint_telemetry(spec, "FL_hip")
+  _drop_joint_telemetry(spec, "FL_thigh")
+  _drop_joint_telemetry(spec, "FL_calf")
+  _drop_joint_telemetry(spec, "RR_hip")
+  _drop_joint_telemetry(spec, "RR_thigh")
+  _drop_joint_telemetry(spec, "RR_calf")
+  _drop_joint_telemetry(spec, "RL_hip")
+  _drop_joint_telemetry(spec, "RL_thigh")
+  _drop_joint_telemetry(spec, "RL_calf")
+  _drop_joint_telemetry(spec, "FR_wheel")
+  _drop_joint_telemetry(spec, "FL_wheel")
+  _drop_joint_telemetry(spec, "RR_wheel")
+  _drop_joint_telemetry(spec, "RL_wheel")
+  spec.delete(spec.sensor("imu_quat"))
+  spec.delete(spec.sensor("imu_acc"))
+  spec.delete(spec.sensor("frame_pos"))
+  spec.delete(spec.sensor("frame_vel"))
+
+  # Reuse the original gyro instead of adding a duplicate.
+  spec.sensor("imu_gyro").name = "imu_ang_vel"
+  # Critic observations use the IMU site's local linear velocity; the source's
+  # world-frame frame_vel is not an equivalent replacement.
+  spec.add_sensor(
+    name="imu_lin_vel", type=mujoco.mjtSensor.mjSENS_VELOCIMETER,
+    objtype=mujoco.mjtObj.mjOBJ_SITE, objname="imu",
+  )
+  spec.add_sensor(
+    name="root_angmom", type=mujoco.mjtSensor.mjSENS_SUBTREEANGMOM,
+    objtype=mujoco.mjtObj.mjOBJ_BODY, objname="base_link",
+  )
 
 
 def bind_task_interfaces(spec: mujoco.MjSpec) -> None:
@@ -51,21 +95,4 @@ def bind_task_interfaces(spec: mujoco.MjSpec) -> None:
   spec.body("RR_calf").geoms[2].name = "RR_calf_collision1"
   _bind_wheel(spec, "RR", -0.05)
 
-  # Preserve every original telemetry sensor. Add the existing observation
-  # names instead of rewriting/removing the upstream sensor group.
-  spec.add_sensor(
-    name="imu_ang_vel", type=mujoco.mjtSensor.mjSENS_GYRO,
-    objtype=mujoco.mjtObj.mjOBJ_SITE, objname="imu",
-  )
-  spec.add_sensor(
-    name="imu_lin_vel", type=mujoco.mjtSensor.mjSENS_VELOCIMETER,
-    objtype=mujoco.mjtObj.mjOBJ_SITE, objname="imu",
-  )
-  spec.add_sensor(
-    name="imu_lin_acc", type=mujoco.mjtSensor.mjSENS_ACCELEROMETER,
-    objtype=mujoco.mjtObj.mjOBJ_SITE, objname="imu",
-  )
-  spec.add_sensor(
-    name="root_angmom", type=mujoco.mjtSensor.mjSENS_SUBTREEANGMOM,
-    objtype=mujoco.mjtObj.mjOBJ_BODY, objname="base_link",
-  )
+  _bind_task_sensors(spec)

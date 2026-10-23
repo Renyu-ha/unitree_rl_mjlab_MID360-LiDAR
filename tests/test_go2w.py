@@ -78,13 +78,29 @@ class Go2WTests(unittest.TestCase):
     for field in fields:
       with self.subTest(field=field):
         np.testing.assert_array_equal(getattr(raw, field), getattr(adapted, field))
-    # Keep all upstream telemetry, with four extra task-specific sensor names.
-    self.assertEqual(adapted.nsensor, raw.nsensor + 4)
-    for sensor_id in range(raw.nsensor):
-      self.assertEqual(adapted.sensor(sensor_id).name, raw.sensor(sensor_id).name)
-      np.testing.assert_array_equal(adapted.sensor(sensor_id).type, raw.sensor(sensor_id).type)
-      np.testing.assert_array_equal(adapted.sensor(sensor_id).objid, raw.sensor(sensor_id).objid)
+    self.assertEqual(adapted.nsensor, 3)
+    np.testing.assert_array_equal(adapted.sensor("imu_ang_vel").type, raw.sensor("imu_gyro").type)
+    np.testing.assert_array_equal(adapted.sensor("imu_ang_vel").objid, raw.sensor("imu_gyro").objid)
     self.assertEqual(GO2W_XML.read_bytes(), before)
+
+  def test_compiled_sensors_match_actual_task_references(self):
+    available = {self.model.sensor(index).name for index in range(self.model.nsensor)}
+    referenced = set()
+    for task in list_tasks():
+      if not task.startswith("Unitree-Go2W-"):
+        continue
+      for play in (False, True):
+        cfg = load_env_cfg(task, play=play)
+        terms = [term for group in cfg.observations.values() for term in group.terms.values()]
+        terms.extend(cfg.rewards.values())
+        for term in terms:
+          sensor = term.params.get("sensor_name", "")
+          if sensor.startswith("robot/"):
+            name = sensor.removeprefix("robot/")
+            self.assertIn(name, available, (task, play, name))
+            referenced.add(name)
+    self.assertEqual(available, referenced)
+    self.assertEqual(available, {"imu_ang_vel", "imu_lin_vel", "root_angmom"})
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
