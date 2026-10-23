@@ -181,6 +181,55 @@ class Go2WTests(unittest.TestCase):
           self.assertEqual(int(geom.contype[0]), 0)
           self.assertEqual(int(geom.conaffinity[0]), 0)
 
+  def test_wheel_cylinders_match_visual_mesh_size_and_axle(self):
+    model = self.model
+    for leg in ("FL", "FR", "RL", "RR"):
+      with self.subTest(leg=leg):
+        collision = model.geom(f"{leg}_wheel_link_collision")
+        body_id = model.body(f"{leg}_wheel_link").id
+        visuals = [i for i in range(model.ngeom) if model.geom_bodyid[i] == body_id
+          and model.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH]
+        self.assertEqual(len(visuals), 1)
+        visual = model.geom(visuals[0])
+        self.assertEqual(int(collision.type[0]), mujoco.mjtGeom.mjGEOM_CYLINDER)
+        self.assertFalse(visual.contype[0] or visual.conaffinity[0])
+        mesh_id = int(visual.dataid[0])
+        start, count = int(model.mesh_vertadr[mesh_id]), int(model.mesh_vertnum[mesh_id])
+        rotation = np.empty((3, 3))
+        mujoco.mju_quat2Mat(rotation.ravel(), visual.quat)
+        vertices = model.mesh_vert[start:start+count] @ rotation.T + visual.pos
+        lower, upper = vertices.min(axis=0), vertices.max(axis=0)
+        np.testing.assert_allclose(collision.pos, (lower + upper) / 2, atol=1e-8)
+        self.assertAlmostEqual(collision.size[0], WHEEL_RADIUS)
+        self.assertAlmostEqual(collision.size[0], np.linalg.norm(vertices[:, [0, 2]], axis=1).max())
+        self.assertAlmostEqual(collision.size[1], (upper[1] - lower[1]) / 2)
+        mujoco.mju_quat2Mat(rotation.ravel(), collision.quat)
+        np.testing.assert_allclose(rotation[:, 2], model.joint(f"{leg}_wheel_joint").axis, atol=1e-12)
+        self.assertAlmostEqual(model.body_mass[body_id], 0.98)
+        np.testing.assert_array_equal(model.body_inertia[body_id], [0.003, 0.0016, 0.0016])
+
+  def test_wheel_ground_contact_height_is_invariant_to_wheel_spin(self):
+    spec = get_spec()
+    spec.worldbody.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=(1, 1, 0.1))
+    model = spec.compile()
+    wheel = model.geom("FL_wheel_link_collision")
+    data = mujoco.MjData(model)
+    joint = model.joint("FL_wheel_joint")
+    distances = []
+    for angle in np.linspace(0.0, 2 * np.pi, 17):
+      data.qpos[:] = model.qpos0
+      data.qpos[joint.qposadr[0]] = angle
+      mujoco.mj_fwdPosition(model, data)
+      axis = data.geom_xmat[wheel.id].reshape(3, 3)[:, 2]
+      support_z = wheel.size[0] * np.sqrt(1.0 - axis[2]**2) + wheel.size[1] * abs(axis[2])
+      data.qpos[2] -= data.geom_xpos[wheel.id, 2] - support_z + 0.0002
+      mujoco.mj_fwdPosition(model, data)
+      contacts = [c.dist for c in data.contact if wheel.id in (c.geom1, c.geom2)
+        and model.geom("floor").id in (c.geom1, c.geom2)]
+      self.assertTrue(contacts)
+      distances.append(min(contacts))
+    np.testing.assert_allclose(distances, -0.0002, atol=1e-7)
+
   def test_self_collision_is_clear_in_default_pose_and_active_when_folded(self):
     model = self.model
     self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_FILTERPARENT)

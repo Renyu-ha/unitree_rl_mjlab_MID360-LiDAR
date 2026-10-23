@@ -42,9 +42,9 @@ flowchart LR
 
 ## 2. Go2W 迁移内容
 
-Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据；角动量奖励仅为测试而移除，其传感器继续保留，后续调整奖励不联动清理传感器。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量、关节与物理形状沿用参考模型，自碰撞设置保持不变。来源与 BSD 许可证保存在 Go2W 资产目录。
+Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据；角动量奖励仅为测试而移除，其传感器继续保留，后续调整奖励不联动清理传感器。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量与关节沿用参考模型；当前四个轮子的碰撞形状采用下述圆柱实验，自碰撞继续开启。来源与 BSD 许可证保存在 Go2W 资产目录。
 
-此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。原模型的物理几何及网格内容已经与参考一致，替换本身不能视为 NaN 修复；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。
+此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。此前物理几何曾与参考对齐，当前仅四个轮碰撞几何改为圆柱；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。这些模型调整本身不能视为 NaN 修复。
 
 轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0)`。官方 mjlab 1.2.0 的速度执行器默认从关节位置限位继承控制范围；连续轮关节的空范围会导致 `invalid control range for actuator`。Go2W 资产包导入时自动启用 `src/utils/mjlab_compat.py` 中的兼容处理，各训练子进程导入资产时也会执行，按 ZhongL1 的方式对连续关节设置 `inheritrange=0.0`、`ctrllimited=False`，保留内置执行器类型、速度伺服和力矩限制，有界关节仍沿用原行为。不需要修改训练环境的 `site-packages` 或重新安装 mjlab。原自定义轮执行器已删除；目标转速仍经动作裁剪和缩放限制在 ±20 rad/s。armature 从 0.02 变为 0.0 会改变轮关节的等效惯量，这是独立于编译修复的动力学参数变化。
 
@@ -287,13 +287,18 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 
 ### 使用 ONNX 交互检查边界
 
+当前为圆柱轮碰撞实验，四轮半径均为 86 mm、全宽约 51.815 mm；圆柱中心与轴向根据原有 STL 的包围盒和轮关节轴对齐。宽度保留我们原模型的尺寸，没有同时改成其他仓库的 45 mm。外观、质量、惯量、KP/KD、力矩上限、armature、接触参数和奖励保持本次替换前的配置。圆柱前版本为 `6ff9526`；其他开源仓库的形状和参数见[轮足接触配置调研](wheeled_contact_survey_zh.md)。
+
 ```bash
 python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
   --onnx-file=../policy.onnx \
   --device=cpu --viewer=viser --viewer-port=8096 \
-  --start-paused=True --inspect-border=True --perception-step=0 \
-  --reference-model=../model_20261023_115651.mjb
+  --start-paused=True --inspect-border=True --perception-step=0
 ```
+
+旧 `model_20261023_115651.mjb` 使用网格轮碰撞体，与当前圆柱模型有意不同，因此此命令不传旧 `--reference-model`；传入时严格几何检查会拒绝继续。该检查仍保留，只有与当前实验匹配的模型才应传入。旧转储逐帧回放仍使用它原本配套的 MJB。已经启动的 play 进程需要重启才能加载新 XML。
+
+训练圆柱对照组时可在原训练命令上增加 `--agent.run-name=v2_cylinder`，保留其余 NaN guard、观测检查、随机种子与 W&B 参数。优先从相同初始条件重新训练以比较故障发生情况；旧策略可用于接缝交互检查，但动力学已经改变，不能用短时未报错证明 GPU NaN 已解决。
 
 ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图内部负责观测归一化，环境负责动作裁剪、缩放和偏置。入口校验输入输出、观测顺序、历史长度、关节顺序、KP/KD、初始关节角与动作元数据。当前导出文件固定 batch=1，使用一个环境；ONNX 自带 CPU ReferenceEvaluator 可运行，无需另装 onnxruntime。
 
@@ -337,3 +342,4 @@ ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图�
 - 新增 ONNX 交互播放并启用自碰撞后，28 项检查通过。用户提供的 726→16 策略通过元数据校验，单个 MJWarp CPU 环境完成 150 个控制步（3 s 仿真）并跨过 Y=-24 接缝，观测和策略输出有限，重置回到指定位置。默认站姿无自身接触；折叠腿部测试在开启 1/1 掩码时产生轮轮接触，切回 1/0 时消失。该短测试不代表完整训练稳定性或 GPU NaN 根因已确认。
 - 固定为最终 XML 后，32 项检查通过：模型加载不再增删接口，只读取 XML 与网格；无用传感器和 3 份未使用网格已从文件中删除。155 个编译物理/接口字段与原实现一致，14 份保留网格的内容与参考一致；32 个 CPU MuJoCo 步的状态及全部传感器输出逐值一致。2 个 MJWarp CPU 环境完成 32 步，观测仍为 `(2, 726)` / `(2, 269)` 且有限。六个任务的训练、回放及 PPO 配置共 18 组保持一致；旧 MJB 几何检查已支持清理无用网格后的编号变化，同时继续校验实际使用的网格内容。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
+- 圆柱轮实验：38 项回归检查通过；新增四轮圆柱中心、半径、宽度、关节轴与质量惯量校验，以及轮子转动 17 个角度时平地接触高度不变的检查。与替换前的编译模型逐项比较，仅四个轮碰撞几何改变，机体力学、关节、执行器、接触参数、网格外观、site 和传感器一致。2 个 MJWarp CPU 环境在最终稀疏感知阶段完成 16 个控制步、1 次 PPO 更新及 ONNX 导出；尚未进行大规模 GPU 训练验证。
