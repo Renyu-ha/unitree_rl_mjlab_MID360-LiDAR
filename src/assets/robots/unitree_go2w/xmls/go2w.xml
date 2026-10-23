@@ -1,4 +1,4 @@
-<!-- Adapted from unitree_mujoco, BSD-3-Clause; see ../LICENSE and ../SOURCE.md. -->
+<!-- Adapted from ZhongL1/unitree_rl_mjlab_go2w @ fe0deea; see go2w.source.xml, model_source.json and ../SOURCE.md. -->
 <mujoco model="go2w">
   <compiler angle="radian" meshdir="" autolimits="true" />
   <option cone="elliptic" impratio="100" />
@@ -38,22 +38,22 @@
     <material name="black" rgba="0 0 0 1" />
     <material name="white" rgba="1 1 1 1" />
     <material name="gray" rgba="0.671705 0.692426 0.774270 1" />
-    <mesh file="../../unitree_go2/xmls/assets/base_0.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/base_1.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/base_2.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/base_3.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/base_4.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/hip_0.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/hip_1.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/thigh_0.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/thigh_1.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/thigh_mirror_0.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/thigh_mirror_1.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/calf_mirror_0.obj" />
-    <mesh file="../../unitree_go2/xmls/assets/calf_mirror_1.obj" />
+    <mesh file="assets/base_0.obj" />
+    <mesh file="assets/base_1.obj" />
+    <mesh file="assets/base_2.obj" />
+    <mesh file="assets/base_3.obj" />
+    <mesh file="assets/base_4.obj" />
+    <mesh file="assets/hip_0.obj" />
+    <mesh file="assets/hip_1.obj" />
+    <mesh file="assets/thigh_0.obj" />
+    <mesh file="assets/thigh_1.obj" />
+    <mesh file="assets/thigh_mirror_0.obj" />
+    <mesh file="assets/thigh_mirror_1.obj" />
+    <mesh file="assets/calf_mirror_0.obj" />
+    <mesh file="assets/calf_mirror_1.obj" />
     <mesh file="assets/calf.stl" />
     <mesh file="assets/calf_mirror.stl" />
-    <mesh file="../../unitree_go2/xmls/assets/foot.obj" />
+    <mesh file="assets/foot.obj" />
     <mesh file="assets/wheel.stl" />
   </asset>
   <worldbody>

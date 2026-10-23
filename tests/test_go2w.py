@@ -4,7 +4,10 @@ Run from the repository root: python -m unittest discover -s tests -v
 """
 
 import ast
+import hashlib
+import json
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -17,7 +20,7 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 
 import src.tasks  # noqa: F401 -- register repository tasks
 from src.assets.robots.unitree_go2w.go2w_constants import (
-  LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg,
+  GO2W_XML, LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg,
 )
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
@@ -29,6 +32,60 @@ class Go2WTests(unittest.TestCase):
   def setUpClass(cls):
     cls.robot = Entity(get_go2w_robot_cfg())
     cls.model = cls.robot.spec.compile()
+
+  def test_model_source_and_all_meshes_match_pinned_git_blobs(self):
+    folder = GO2W_XML.parent
+    manifest = json.loads((folder / "model_source.json").read_text(encoding="utf-8"))
+    self.assertEqual(manifest["repository"], "ZhongL1/unitree_rl_mjlab_go2w")
+    self.assertEqual(manifest["commit"], "fe0deeaef2e6e579db63b782f1082b5d2b4ed071")
+    files = [(manifest["source_xml_file"], manifest["source_xml_git_blob"], None)]
+    files.extend((mesh["file"], mesh["git_blob"], mesh["size"]) for mesh in manifest["meshes"])
+    for filename, expected_hash, expected_size in files:
+      with self.subTest(file=filename):
+        payload = (folder / filename).read_bytes()
+        blob = b"blob " + str(len(payload)).encode() + b"\0" + payload
+        self.assertEqual(hashlib.sha1(blob).hexdigest(), expected_hash)
+        if expected_size is not None:
+          self.assertEqual(len(payload), expected_size)
+    mesh_paths = [mesh.get("file") for mesh in ET.parse(GO2W_XML).findall("asset/mesh")]
+    self.assertEqual(mesh_paths, [mesh["file"] for mesh in manifest["meshes"]])
+    self.assertEqual(len(mesh_paths), 17)
+    self.assertTrue(all(Path(path).parent == Path("assets") for path in mesh_paths))
+    # Loading the active XML itself must work without the other robot folders
+    # or the asset injection performed by Entity/get_spec().
+    standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
+    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 17, 4))
+
+  def test_reference_model_physical_structure_is_preserved(self):
+    folder = GO2W_XML.parent
+    source = ET.parse(folder / "go2w.source.xml").getroot()
+    active = ET.parse(GO2W_XML).getroot()
+    self.assertEqual(
+      ET.canonicalize(ET.tostring(source.find("default")), strip_text=True),
+      ET.canonicalize(ET.tostring(active.find("default")), strip_text=True),
+    )
+    source_bodies = source.findall(".//worldbody//body")
+    active_bodies = active.findall(".//worldbody//body")
+    self.assertEqual(len(source_bodies), len(active_bodies))
+    for original, adapted in zip(source_bodies, active_bodies, strict=True):
+      with self.subTest(body=original.get("name")):
+        self.assertEqual(original.attrib, adapted.attrib)
+        self.assertEqual(original.find("inertial").attrib, adapted.find("inertial").attrib)
+        self.assertEqual(len(original.findall("joint")), len(adapted.findall("joint")))
+        for joint, adapted_joint in zip(original.findall("joint"), adapted.findall("joint"), strict=True):
+          attrs = dict(adapted_joint.attrib)
+          if "wheel" in joint.get("name", ""):
+            self.assertEqual(attrs.pop("limited"), "false")
+          self.assertEqual(joint.attrib, attrs)
+        self.assertEqual(len(original.findall("geom")), len(adapted.findall("geom")))
+        for geom, adapted_geom in zip(original.findall("geom"), adapted.findall("geom"), strict=True):
+          attrs = dict(adapted_geom.attrib)
+          attrs.pop("name", None)
+          # A decorative wheel mesh duplicates the physical mesh upstream;
+          # keep the existing visual-only classification in the local adapter.
+          if original.get("name", "").endswith("_wheel_link") and geom.get("class") is None:
+            self.assertEqual(attrs.pop("class"), "visual")
+          self.assertEqual(geom.attrib, attrs)
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
