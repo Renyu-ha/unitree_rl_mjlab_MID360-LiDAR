@@ -42,7 +42,7 @@ flowchart LR
 
 ## 2. Go2W 迁移内容
 
-Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 2 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器仅保留 `imu_ang_vel`、`imu_lin_vel`，关节状态直接读取仿真数据；移除角动量奖励后同步删除不再使用的 `root_angmom`。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量、关节与物理形状沿用参考模型，自碰撞设置保持不变。来源与 BSD 许可证保存在 Go2W 资产目录。
+Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据；角动量奖励仅为测试而移除，其传感器继续保留，后续调整奖励不联动清理传感器。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量、关节与物理形状沿用参考模型，自碰撞设置保持不变。来源与 BSD 许可证保存在 Go2W 资产目录。
 
 此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。原模型的物理几何及网格内容已经与参考一致，替换本身不能视为 NaN 修复；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。
 

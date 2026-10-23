@@ -45,7 +45,7 @@ class Go2WTests(unittest.TestCase):
     # Loading the active XML itself must work without the other robot folders
     # or the asset injection performed by Entity/get_spec().
     standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 2))
+    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 3))
 
   def test_loader_does_not_modify_final_xml_definitions(self):
     before = GO2W_XML.read_bytes()
@@ -65,10 +65,10 @@ class Go2WTests(unittest.TestCase):
     for field in fields:
       with self.subTest(field=field):
         np.testing.assert_array_equal(getattr(raw, field), getattr(loaded, field))
-    self.assertEqual(loaded.nsensor, 2)
+    self.assertEqual(loaded.nsensor, 3)
     self.assertEqual(GO2W_XML.read_bytes(), before)
 
-  def test_compiled_sensors_match_actual_task_references(self):
+  def test_task_sensor_references_exist_with_retained_telemetry(self):
     available = {self.model.sensor(index).name for index in range(self.model.nsensor)}
     referenced = set()
     for task in list_tasks():
@@ -84,8 +84,8 @@ class Go2WTests(unittest.TestCase):
             name = sensor.removeprefix("robot/")
             self.assertIn(name, available, (task, play, name))
             referenced.add(name)
-    self.assertEqual(available, referenced)
-    self.assertEqual(available, {"imu_ang_vel", "imu_lin_vel"})
+    self.assertEqual(referenced, {"imu_ang_vel", "imu_lin_vel"})
+    self.assertEqual(available, referenced | {"root_angmom"})
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
