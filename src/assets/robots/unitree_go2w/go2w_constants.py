@@ -10,6 +10,7 @@ import mujoco
 
 from mjlab.actuator import BuiltinPositionActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.utils.os import update_assets
 from mjlab.utils.spec_config import CollisionCfg
 
 from .wheel_actuator import WheelVelocityActuatorCfg
@@ -19,8 +20,11 @@ LEG_JOINTS = (r".*_(hip|thigh|calf)_joint",)
 WHEEL_JOINTS = (r".*_wheel_joint",)
 # Natural model order, also used by contact sensors, hub sites and rewards.
 WHEEL_SITES = ("FL", "FR", "RL", "RR")
-WHEEL_BODIES = tuple(f"{leg}_wheel_link" for leg in WHEEL_SITES)
-WHEEL_GEOMS = tuple(f"{body}_collision" for body in WHEEL_BODIES)
+WHEEL_BODIES = ("FL_wheel_link", "FR_wheel_link", "RL_wheel_link", "RR_wheel_link")
+WHEEL_GEOMS = (
+  "FL_wheel_link_collision", "FR_wheel_link_collision",
+  "RL_wheel_link_collision", "RR_wheel_link_collision",
+)
 WHEEL_RADIUS = 0.086  # metres, measured from the upstream wheel STL
 LEG_ACTION_SCALE = 0.5  # radians
 WHEEL_ACTION_SCALE = 20.0  # radians/second
@@ -30,9 +34,13 @@ def get_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(GO2W_XML))
   # Embed both the shared Go2 visuals and Go2W meshes before scene attachment.
   # The XML paths also work when loaded directly by MuJoCo.
-  spec.assets = {
-    mesh.file: (GO2W_XML.parent / mesh.file).read_bytes() for mesh in spec.meshes
-  }
+  assets = {}
+  update_assets(assets, GO2W_XML.parent / "assets", "assets", glob="*.stl")
+  update_assets(
+    assets, GO2W_XML.parent / "../../unitree_go2/xmls/assets",
+    "../../unitree_go2/xmls/assets", glob="*.obj",
+  )
+  spec.assets = assets
   return spec
 
 

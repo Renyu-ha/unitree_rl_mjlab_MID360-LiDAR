@@ -13,10 +13,11 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
 from mjlab.envs.mdp.actions import JointPositionActionCfg, JointVelocityActionCfg
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
-from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg, ObjRef, RayCastSensorCfg
 from mjlab.tasks.velocity.mdp.terminations import illegal_contact
 from mjlab.terrains.config import ROUGH_TERRAINS_CFG
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
@@ -25,6 +26,7 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   LEG_ACTION_SCALE, LEG_JOINTS, WHEEL_ACTION_SCALE, WHEEL_BODIES,
   WHEEL_GEOMS, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
 )
+from src.assets.robots.unitree_go2w.contact_sensor import WheelGroundContactSensorCfg
 from src.tasks.velocity import mdp
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
 from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
@@ -42,29 +44,35 @@ def _terrain_cfg(play: bool, perceptive: bool = False, stepup: bool = False):
   terrain.num_cols = 5 if play else 6
   terrain.border_width = 10.0
   # Environments spawn in the centre: inverted pyramids train outward ascent.
-  proportions = {
-    "flat": 0.10 if perceptive else 0.20,
-    "pyramid_stairs": 0.10 if stepup else 0.20,
-    "pyramid_stairs_inv": 0.60 if stepup else (0.35 if perceptive else 0.20),
-    "hf_pyramid_slope": 0.05 if stepup else 0.10,
-    "hf_pyramid_slope_inv": 0.05 if stepup else 0.10,
-    "random_rough": 0.05 if stepup else 0.10,
-    "wave_terrain": 0.05,
-  }
-  for name, sub in terrain.sub_terrains.items():
-    changes = {"proportion": proportions.get(name, 0.0)}
-    if name in ("pyramid_stairs", "pyramid_stairs_inv"):
-      changes.update(
-        step_height_range=(0.08, 0.08) if play else (0.02, 0.14 if perceptive else 0.10),
-        step_width=0.40, platform_width=2.0,
-      )
-    elif name.startswith("hf_pyramid_slope"):
-      changes["slope_range"] = (0.0, 0.30)
-    elif name == "random_rough":
-      changes.update(noise_range=(0.005, 0.035), noise_step=0.005)
-    elif name == "wave_terrain":
-      changes["amplitude_range"] = (0.0, 0.05)
-    terrain.sub_terrains[name] = replace(sub, **changes)
+  terrain.sub_terrains["flat"] = replace(
+    terrain.sub_terrains["flat"], proportion=0.10 if perceptive else 0.20,
+  )
+  terrain.sub_terrains["pyramid_stairs"] = replace(
+    terrain.sub_terrains["pyramid_stairs"], proportion=0.10 if stepup else 0.20,
+    step_height_range=(0.08, 0.08) if play else (0.02, 0.14 if perceptive else 0.10),
+    step_width=0.40, platform_width=2.0,
+  )
+  terrain.sub_terrains["pyramid_stairs_inv"] = replace(
+    terrain.sub_terrains["pyramid_stairs_inv"],
+    proportion=0.60 if stepup else (0.35 if perceptive else 0.20),
+    step_height_range=(0.08, 0.08) if play else (0.02, 0.14 if perceptive else 0.10),
+    step_width=0.40, platform_width=2.0,
+  )
+  terrain.sub_terrains["hf_pyramid_slope"] = replace(
+    terrain.sub_terrains["hf_pyramid_slope"],
+    proportion=0.05 if stepup else 0.10, slope_range=(0.0, 0.30),
+  )
+  terrain.sub_terrains["hf_pyramid_slope_inv"] = replace(
+    terrain.sub_terrains["hf_pyramid_slope_inv"],
+    proportion=0.05 if stepup else 0.10, slope_range=(0.0, 0.30),
+  )
+  terrain.sub_terrains["random_rough"] = replace(
+    terrain.sub_terrains["random_rough"], proportion=0.05 if stepup else 0.10,
+    noise_range=(0.005, 0.035), noise_step=0.005,
+  )
+  terrain.sub_terrains["wave_terrain"] = replace(
+    terrain.sub_terrains["wave_terrain"], proportion=0.05, amplitude_range=(0.0, 0.05),
+  )
   return terrain
 
 
@@ -85,22 +93,26 @@ def _make_go2w_env_cfg(
   cfg.scene.terrain.terrain_generator = _terrain_cfg(play, perceptive=perceptive, stepup=stepup)
   cfg.scene.terrain.max_init_terrain_level = 0
 
-  for sensor in cfg.scene.sensors:
-    if sensor.name == "terrain_scan":
-      assert isinstance(sensor, RayCastSensorCfg)
-      sensor.frame.name = "base_link"
-      sensor.include_geom_groups = (0, 1)
-      # Dense and sparse observations refer to exactly the same grid cells.
-      sensor.pattern = OffsetGridPatternCfg(
-        size=(SCAN["size_x_m"], SCAN["size_y_m"]), resolution=SCAN["resolution_m"],
-        x_offset=SCAN["x_offset_m"], y_offset=SCAN["y_offset_m"],
-      )
-
-  feet_ground_cfg = ContactSensorCfg(
+  terrain_scan = RayCastSensorCfg(
+    name="terrain_scan",
+    frame=ObjRef(type="body", name="base_link", entity="robot"),
+    ray_alignment="yaw", include_geom_groups=(0, 1),
+    pattern=OffsetGridPatternCfg(
+      size=(SCAN["size_x_m"], SCAN["size_y_m"]), resolution=SCAN["resolution_m"],
+      x_offset=SCAN["x_offset_m"], y_offset=SCAN["y_offset_m"],
+    ),
+    max_distance=5.0, exclude_parent_body=True, debug_vis=True,
+    viz=RayCastSensorCfg.VizCfg(show_normals=True),
+  )
+  feet_ground_cfg = WheelGroundContactSensorCfg(
     name="feet_ground_contact",
     primary=ContactMatch(mode="geom", pattern=WHEEL_GEOMS, entity="robot"),
     secondary=ContactMatch(mode="body", pattern="terrain"),
-    fields=("found", "force"), reduce="netforce", num_slots=1, track_air_time=True,
+    # One sensor returns per-wheel total forces for the critic/landing reward
+    # and normal-only forces for robot_lab's contact-spin gate.
+    fields=("found", "force", "normal", "tangent"),
+    # Match the simulation contact capacity so the shared total force is not truncated.
+    reduce="none", num_slots=128, track_air_time=True,
   )
   nonfoot_ground_cfg = ContactSensorCfg(
     name="nonfoot_ground_touch",
@@ -111,15 +123,7 @@ def _make_go2w_env_cfg(
     fields=("found", "force"), reduce="none", num_slots=1, history_length=4,
   )
 
-  # Keep the existing netforce sensor for observations/landing rewards. Raw
-  # contact slots let wheel_spin_contact sum normal reactions without friction.
-  wheel_spin_contact_cfg = ContactSensorCfg(
-    name="wheel_spin_contact",
-    primary=ContactMatch(mode="geom", pattern=WHEEL_GEOMS, entity="robot"),
-    secondary=ContactMatch(mode="body", pattern="terrain"),
-    fields=("force", "normal"), reduce="none", num_slots=8,
-  )
-  cfg.scene.sensors += (feet_ground_cfg, nonfoot_ground_cfg, wheel_spin_contact_cfg)
+  cfg.scene.sensors = (terrain_scan, feet_ground_cfg, nonfoot_ground_cfg)
 
   cfg.actions = {
     "joint_pos": JointPositionActionCfg(
@@ -131,18 +135,79 @@ def _make_go2w_env_cfg(
       scale=WHEEL_ACTION_SCALE, use_default_offset=False,
     ),
   }
-  for name, group in cfg.observations.items():
-    group.terms = deepcopy(group.terms)
-    group.history_length = 3 if name == "actor" else 1
-    # Absolute wheel angles grow without bound and carry no useful pose signal.
-    for term in ("joint_pos", "joint_vel"):
-      group.terms[term].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
-    group.terms["wheel_vel"] = replace(
-      deepcopy(group.terms["joint_vel"]),
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
-      scale=0.05,
-    )
-  cfg.observations["critic"].terms["foot_height"].params["asset_cfg"].site_names = WHEEL_SITES
+  cfg.observations = {
+    "actor": ObservationGroupCfg(
+      history_length=3, concatenate_terms=True, enable_corruption=True,
+      terms={
+        "base_ang_vel": ObservationTermCfg(
+          func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"},
+          noise=Unoise(n_min=-0.2, n_max=0.2),
+        ),
+        "projected_gravity": ObservationTermCfg(
+          func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05),
+        ),
+        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "twist"}),
+        "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
+        "joint_pos": ObservationTermCfg(
+          func=mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
+          noise=Unoise(n_min=-0.01, n_max=0.01),
+        ),
+        "joint_vel": ObservationTermCfg(
+          func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
+          noise=Unoise(n_min=-1.5, n_max=1.5),
+        ),
+        "actions": ObservationTermCfg(func=mdp.last_action),
+        "height_scan": ObservationTermCfg(
+          func=envs_mdp.height_scan, params={"sensor_name": "terrain_scan"},
+          noise=Unoise(n_min=-0.1, n_max=0.1), scale=0.2,
+        ),
+        "wheel_vel": ObservationTermCfg(
+          func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
+          noise=Unoise(n_min=-1.5, n_max=1.5), scale=0.05,
+        ),
+      },
+    ),
+    "critic": ObservationGroupCfg(
+      history_length=1, concatenate_terms=True, enable_corruption=False,
+      terms={
+        "base_ang_vel": ObservationTermCfg(
+          func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"},
+          noise=Unoise(n_min=-0.2, n_max=0.2),
+        ),
+        "projected_gravity": ObservationTermCfg(
+          func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05),
+        ),
+        "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "twist"}),
+        "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
+        "joint_pos": ObservationTermCfg(
+          func=mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
+          noise=Unoise(n_min=-0.01, n_max=0.01),
+        ),
+        "joint_vel": ObservationTermCfg(
+          func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
+          noise=Unoise(n_min=-1.5, n_max=1.5),
+        ),
+        "actions": ObservationTermCfg(func=mdp.last_action),
+        "height_scan": ObservationTermCfg(
+          func=envs_mdp.height_scan, params={"sensor_name": "terrain_scan"}, scale=0.2,
+        ),
+        "base_lin_vel": ObservationTermCfg(
+          func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_lin_vel"},
+          noise=Unoise(n_min=-0.5, n_max=0.5),
+        ),
+        "foot_height": ObservationTermCfg(
+          func=mdp.foot_height, params={"asset_cfg": SceneEntityCfg("robot", site_names=WHEEL_SITES)},
+        ),
+        "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time, params={"sensor_name": "feet_ground_contact"}),
+        "foot_contact": ObservationTermCfg(func=mdp.foot_contact, params={"sensor_name": "feet_ground_contact"}),
+        "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces, params={"sensor_name": "feet_ground_contact"}),
+        "wheel_vel": ObservationTermCfg(
+          func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
+          noise=Unoise(n_min=-1.5, n_max=1.5), scale=0.05,
+        ),
+      },
+    ),
+  }
   cfg.events["foot_friction"].params["asset_cfg"].geom_names = WHEEL_GEOMS
   cfg.events["encoder_bias"].params["asset_cfg"].joint_names = LEG_JOINTS
   cfg.events["base_com"].params["asset_cfg"].body_names = ("base_link",)
@@ -150,8 +215,10 @@ def _make_go2w_env_cfg(
     0: (-0.03, 0.03), 1: (-0.02, 0.02), 2: (-0.02, 0.02),
   }
 
-  for term in ("pose", "stand_still", "joint_pos_limits", "joint_acc_l2"):
-    cfg.rewards[term].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["pose"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["stand_still"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["joint_pos_limits"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["joint_acc_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
   cfg.rewards["pose"].params["std_standing"] = {
     r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
     r".*(FR|FL|RR|RL)_thigh_joint.*": 0.1,
@@ -170,12 +237,13 @@ def _make_go2w_env_cfg(
   cfg.rewards["body_orientation_l2"].params["asset_cfg"].body_names = ("base_link",)
   cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("base_link",)
   # Gait phase and mandatory foot clearance conflict with continuous rolling.
-  for term in ("foot_gait", "foot_clearance", "foot_slip"):
-    cfg.rewards.pop(term)
+  cfg.rewards.pop("foot_gait")
+  cfg.rewards.pop("foot_clearance")
+  cfg.rewards.pop("foot_slip")
   cfg.rewards["wheel_spin_contact"] = RewardTermCfg(
     func=wheel_spin_contact, weight=-0.15,
     params={
-      "sensor_name": wheel_spin_contact_cfg.name, "wheel_radius": WHEEL_RADIUS,
+      "sensor_name": "feet_ground_contact", "wheel_radius": WHEEL_RADIUS,
       "contact_threshold": 1.0,
       "joint_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS),
       "body_cfg": SceneEntityCfg("robot", body_names=WHEEL_BODIES),
@@ -234,9 +302,9 @@ def _make_go2w_env_cfg(
   if stage == "flat":
     cfg.scene.terrain.terrain_type = "plane"
     cfg.scene.terrain.terrain_generator = None
-    cfg.scene.sensors = tuple(s for s in cfg.scene.sensors if s.name != "terrain_scan")
-    for group in cfg.observations.values():
-      group.terms.pop("height_scan")
+    cfg.scene.sensors = (feet_ground_cfg, nonfoot_ground_cfg)
+    cfg.observations["actor"].terms.pop("height_scan")
+    cfg.observations["critic"].terms.pop("height_scan")
     cfg.curriculum.pop("terrain_levels", None)
     cfg.events.pop("randomize_terrain", None)
   return cfg
@@ -249,11 +317,10 @@ def _configure_perception(cfg: ManagerBasedRlEnvCfg, *, play: bool, version: int
   scan.delay_max_lag = 0 if play else 1
   if version == 1:
     return
-  dense = next(s for s in cfg.scene.sensors if s.name == "terrain_scan")
   scan.func = mdp.bridged_mid360_height_scan_memory()
   scan.params = {
     # Both views share rays; the memory term applies visibility and sparsity.
-    "sensor_name": dense.name, "mid360_sensor_name": dense.name, **SCAN,
+    "sensor_name": "terrain_scan", "mid360_sensor_name": "terrain_scan", **SCAN,
     "visible_x_min_m": 0.25, "visible_x_max_m": 1.15, "visible_y_abs_m": 0.50,
     "keep_prob_min": 1.0 if play else 0.65, "keep_prob_max": 1.0,
     "frame_dropout_prob": 0.0 if play else 0.02,
@@ -280,11 +347,15 @@ def _configure_stepup(cfg: ManagerBasedRlEnvCfg, *, play: bool) -> None:
 
 def _configure_step14(cfg: ManagerBasedRlEnvCfg) -> None:
   generator = cfg.scene.terrain.terrain_generator
-  for name, sub in generator.sub_terrains.items():
-    if name == "pyramid_stairs_inv":
-      generator.sub_terrains[name] = replace(sub, proportion=1.0, step_height_range=(0.14, 0.14))
-    else:
-      generator.sub_terrains[name] = replace(sub, proportion=0.0)
+  generator.sub_terrains["flat"] = replace(generator.sub_terrains["flat"], proportion=0.0)
+  generator.sub_terrains["pyramid_stairs"] = replace(generator.sub_terrains["pyramid_stairs"], proportion=0.0)
+  generator.sub_terrains["pyramid_stairs_inv"] = replace(
+    generator.sub_terrains["pyramid_stairs_inv"], proportion=1.0, step_height_range=(0.14, 0.14),
+  )
+  generator.sub_terrains["hf_pyramid_slope"] = replace(generator.sub_terrains["hf_pyramid_slope"], proportion=0.0)
+  generator.sub_terrains["hf_pyramid_slope_inv"] = replace(generator.sub_terrains["hf_pyramid_slope_inv"], proportion=0.0)
+  generator.sub_terrains["random_rough"] = replace(generator.sub_terrains["random_rough"], proportion=0.0)
+  generator.sub_terrains["wave_terrain"] = replace(generator.sub_terrains["wave_terrain"], proportion=0.0)
   generator.num_rows = generator.num_cols = 1
   generator.curriculum = False
   cfg.curriculum.pop("terrain_levels", None)

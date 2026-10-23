@@ -80,12 +80,15 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 新文件入口：
 
 - `src/assets/robots/unitree_go2w/go2w_constants.py`：模型、初始姿态、执行器、碰撞配置。
+- `src/assets/robots/unitree_go2w/contact_sensor.py`：共享轮地接触传感器，同时提供每轮总力、纯法向合力和接触时间。
 - `src/tasks/velocity/config/go2w/env_cfgs.py`：场景、动作、观测、地形和感知课程。
 - `src/tasks/velocity/config/go2w/rl_cfg.py`：PPO 参数与日志目录。
 - `src/tasks/velocity/mdp/wheel_rewards.py`：滚动接触和停车奖励。
 - `src/tasks/velocity/rl/go2w_runner.py`：混合动作 ONNX 元数据。
 
 Go2W 配置直接从公共根层构建：环境以 `make_velocity_env_cfg()` 为起点，在 Go2W 模块内显式配置传感器、默认姿态约束、事件和终止条件；PPO 直接实例化 mjlab 的 `RslRlOnPolicyRunnerCfg`、`RslRlModelCfg`、`RslRlPpoAlgorithmCfg`。六个已注册任务均调用 Go2W 私有基础构建器，通过局部配置函数应用感知与地形阶段，不导入 Go2/G1 等其他机器人的 task 配置，也不串接已注册 task 的工厂函数。
+
+Go2W 的 Actor/Critic 观测项、传感器、地形项、奖励选择、资产名称及六个任务注册均逐项显式配置；配置文件不使用 `for`/`while`、列表/字典推导式或生成器表达式，回归检查会检查这一约束。接触数据在运行时仍使用张量运算做物理归约。
 
 接触打滑采用本地 `robot_lab`（检查时 HEAD 为 `1a8193f`）中 `source/loco_lab/loco_lab/tasks/physx/mdp/rewards/rewards.py::wheel_spin_contact` 的定义；该文件的版权与 Apache-2.0 标识保留在迁移文件头部。此处做了 mjlab 数据接口适配，公式为：
 
@@ -95,7 +98,9 @@ spin_i = max(0.8 * R * abs(wheel_joint_speed_i) - ||wheel_COM_velocity_i|| - 0.1
 reward_term = -0.15 * sum_i(contact_i * spin_i)
 ```
 
-沿用参考实现的 `0.8` 容差系数、`0.1 m/s` 死区和 `1 N` 阈值；`R` 使用 Go2W 的 `0.086 m`，权重保留本次迁移初值 `-0.15`，并非照搬其他机器人的训练权重。原先的 `wheel_slip` 和几何接触点速度近似已移除。mjlab 新增独立的 `wheel_spin_contact` 传感器，每轮 8 个原始接触槽，从真实接触法向和接触坐标系的法向力分量求和，排除切向摩擦力；原有接触观测的维度不变。这一项衡量接触时的过度空转，不包含单独的侧滑惩罚。
+沿用参考实现的 `0.8` 容差系数、`0.1 m/s` 死区和 `1 N` 阈值；`R` 使用 Go2W 的 `0.086 m`，权重保留本次迁移初值 `-0.15`，并非照搬其他机器人的训练权重。原先的 `wheel_slip` 和几何接触点速度近似已移除。
+
+空转奖励直接使用共享的 `feet_ground_contact`，不再建立独立的 `wheel_spin_contact` 传感器。mjlab 的普通 `netforce` 包含切向摩擦，无法直接作为 robot_lab 的纯法向力；共享适配器将同一接触的 `found/force/normal/tangent` 打包在每轮一个 MuJoCo 后端传感器中，确保 CUDA 下力和接触坐标轴的槽位一一对应。配置的 128 个原始槽与仿真接触匹配容量一致，随后按轮归约：`force` 为世界坐标系总力，用于原有接触观测与落地奖励；`net_normal_force_w` 为纯法向合力，供空转门控使用。对外接触状态、接触时间均为每轮一个值，力为每轮三维向量，Critic 维度不变。这一项衡量接触时的过度空转，不包含单独的侧滑惩罚。
 
 ## 3. 安装与训练
 
@@ -191,4 +196,6 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 - 对照固定参考提交逐项检查，17 个机体的变换、惯量和几何、17 份网格的 Git blob 哈希、16 个关节初值及执行器参数匹配。六个任务共 18 组对比确认，机器人资产以外的环境配置和 PPO 配置没有变化。
 - 正式 `scripts/train.py` 入口以 16 个环境完成 32 次 PPO 迭代，开启物理 NaN guard 和 Actor/Critic 逐项严格检查，全程未出现 NaN/Inf，checkpoint 与 ONNX 正常生成。使用当前默认 Newton 求解器，没有附加 CG 覆盖。
 - 最终稀疏感知阶段以 4 个环境完成 16 个控制步、1 次 PPO 更新和 ONNX 格式/动作元数据校验，观测维度仍为 Actor `(4, 726)`、Critic `(4, 269)`。
+- 共享接触传感器及显式配置改造后，19 项回归检查通过；新增配置无循环/推导式检查、多接触总力/法向力分离、反向接触坐标轴、逐轮接触时间和每轮单一打包后端传感器检查。六个任务的 18 组对比确认，除接触传感器与空转奖励的传感器引用外，其余配置一致。
+- 额外以 4 个环境执行 64 步随机动作，将共享传感器与同场景的原始 `netforce` 传感器对照：逐轮总力、接触数量、腾空/接触时间及首次接触事件一致，实测总力最大误差为 0 N。共享传感器随后通过最终稀疏阶段的 16 步仿真、1 次 PPO 更新和 ONNX 校验。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
