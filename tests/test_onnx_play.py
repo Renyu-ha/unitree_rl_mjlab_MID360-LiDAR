@@ -76,6 +76,19 @@ class OnnxPlayTests(unittest.TestCase):
       with self.assertRaisesRegex(ValueError, "geom_pos"):
         verify_reference_geometry(model, path)
 
+  def test_reference_check_handles_removed_unused_meshes_but_rejects_changed_vertices(self):
+    mesh = '<mesh name="{name}" vertex="0 0 0 1 0 0 0 1 0 0 0 1"/>'
+    template = '<mujoco><asset>{assets}</asset><worldbody><geom name="wheel" type="mesh" mesh="wheel"/></worldbody></mujoco>'
+    current = mujoco.MjModel.from_xml_string(template.format(assets=mesh.format(name="wheel")))
+    saved = mujoco.MjModel.from_xml_string(template.format(assets=mesh.format(name="unused") + mesh.format(name="wheel")))
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "scene.mjb"
+      mujoco.mj_saveModel(saved, str(path))
+      verify_reference_geometry(current, path)
+      current.mesh_vert[0, 0] += .01
+      with self.assertRaisesRegex(ValueError, "mesh_vert"):
+        verify_reference_geometry(current, path)
+
 
 if __name__ == "__main__":
   unittest.main()

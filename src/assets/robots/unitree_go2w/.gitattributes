@@ -1,4 +1,3 @@
-# Preserve the source repository's exact Git blob hashes on Windows checkouts.
-# The verbatim upstream XML contains one whitespace-only line.
-xmls/go2w.xml -text whitespace=-blank-at-eol
+# Keep the final XML readable and the reference meshes byte-for-byte intact.
+xmls/go2w.xml text eol=lf
 xmls/assets/* -text -diff

@@ -99,12 +99,35 @@ def verify_reference_geometry(model, reference_path):
     if model.geom(index).name != reference.geom(index).name:
       raise ValueError(f"Reference geom name mismatch at {index}")
   # Compare terrain mesh/heightfield contents as well as geometry transforms.
-  for field in ("geom_bodyid", "geom_type", "geom_dataid", "geom_pos", "geom_quat",
-                "geom_size", "mesh_vert", "mesh_face", "mesh_pos", "mesh_quat",
+  for field in ("geom_bodyid", "geom_type", "geom_pos", "geom_quat", "geom_size",
                 "hfield_data", "hfield_size", "hfield_nrow", "hfield_ncol"):
     current, saved = getattr(model, field), getattr(reference, field)
     if current.shape != saved.shape or not np.array_equal(current, saved):
       raise ValueError(f"Regenerated geometry differs from the reference MJB: {field}")
+  # Removing unused mesh assets can renumber mesh IDs without changing any
+  # geometry. Compare the actual meshes referenced by each corresponding geom.
+  checked = set()
+  for index in range(model.ngeom):
+    current_id, saved_id = int(model.geom_dataid[index]), int(reference.geom_dataid[index])
+    if model.geom_type[index] != mujoco.mjtGeom.mjGEOM_MESH:
+      if current_id != saved_id:
+        raise ValueError("Regenerated geometry differs from the reference MJB: geom_dataid")
+      continue
+    if (current_id, saved_id) in checked:
+      continue
+    checked.add((current_id, saved_id))
+    for field in ("mesh_pos", "mesh_quat", "mesh_scale"):
+      if not np.array_equal(getattr(model, field)[current_id], getattr(reference, field)[saved_id]):
+        raise ValueError(f"Regenerated geometry differs from the reference MJB: {field}")
+    for kind in ("vert", "face"):
+      current_start = getattr(model, f"mesh_{kind}adr")[current_id]
+      current_count = getattr(model, f"mesh_{kind}num")[current_id]
+      saved_start = getattr(reference, f"mesh_{kind}adr")[saved_id]
+      saved_count = getattr(reference, f"mesh_{kind}num")[saved_id]
+      current = getattr(model, f"mesh_{kind}")[current_start:current_start + current_count]
+      saved = getattr(reference, f"mesh_{kind}")[saved_start:saved_start + saved_count]
+      if current.shape != saved.shape or not np.array_equal(current, saved):
+        raise ValueError(f"Regenerated geometry differs from the reference MJB: mesh_{kind}")
   print("[INFO] Geometry matches the supplied MJB (including terrain mesh/heightfield data)")
 
 

@@ -4,8 +4,6 @@ Run from the repository root: python -m unittest discover -s tests -v
 """
 
 import ast
-import hashlib
-import json
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -34,53 +32,39 @@ class Go2WTests(unittest.TestCase):
     cls.robot = Entity(get_go2w_robot_cfg())
     cls.model = cls.robot.spec.compile()
 
-  def test_model_source_and_all_meshes_match_pinned_git_blobs(self):
+  def test_final_xml_is_self_contained_without_unused_assets(self):
     folder = GO2W_XML.parent
-    manifest = json.loads((folder / "model_source.json").read_text(encoding="utf-8"))
-    self.assertEqual(manifest["repository"], "ZhongL1/unitree_rl_mjlab_go2w")
-    self.assertEqual(manifest["commit"], "fe0deeaef2e6e579db63b782f1082b5d2b4ed071")
-    self.assertEqual(GO2W_XML.name, manifest["source_xml_file"])
-    self.assertEqual(GO2W_XML.name, manifest["active_xml_file"])
-    files = [(manifest["source_xml_file"], manifest["source_xml_git_blob"], None)]
-    files.extend((mesh["file"], mesh["git_blob"], mesh["size"]) for mesh in manifest["meshes"])
-    for filename, expected_hash, expected_size in files:
-      with self.subTest(file=filename):
-        payload = (folder / filename).read_bytes()
-        blob = b"blob " + str(len(payload)).encode() + b"\0" + payload
-        self.assertEqual(hashlib.sha1(blob).hexdigest(), expected_hash)
-        if expected_size is not None:
-          self.assertEqual(len(payload), expected_size)
     root = ET.parse(GO2W_XML).getroot()
     meshdir = Path(root.find("compiler").get("meshdir", ""))
     mesh_paths = [(meshdir / mesh.get("file")).as_posix() for mesh in root.findall("asset/mesh")]
-    self.assertEqual(mesh_paths, [mesh["file"] for mesh in manifest["meshes"]])
-    self.assertEqual(len(mesh_paths), 17)
+    self.assertEqual(len(mesh_paths), 14)
     self.assertTrue(all(Path(path).parent == Path("assets") for path in mesh_paths))
+    self.assertEqual({(folder / path).name for path in mesh_paths}, {path.name for path in (folder / "assets").iterdir()})
+    self.assertEqual({Path(path).stem for path in mesh_paths}, {geom.get("mesh") for geom in root.findall(".//worldbody//geom") if geom.get("mesh")})
     # Loading the active XML itself must work without the other robot folders
     # or the asset injection performed by Entity/get_spec().
     standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 17, 53))
+    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 3))
 
-  def test_reference_model_physical_structure_is_preserved(self):
+  def test_loader_does_not_modify_final_xml_definitions(self):
     before = GO2W_XML.read_bytes()
     raw = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    adapted = get_spec().compile()
-    # Check the adapter before Entity applies the existing controller/contact
-    # configuration. The adapter must not redefine any physical parameters.
+    loaded = get_spec().compile()
+    # The loader only embeds files; all model interfaces are already in XML.
     fields = (
       "body_pos", "body_quat", "body_ipos", "body_iquat", "body_mass", "body_inertia",
       "jnt_type", "jnt_pos", "jnt_axis", "jnt_range", "jnt_limited",
       "dof_armature", "dof_damping", "dof_frictionloss",
       "geom_type", "geom_size", "geom_pos", "geom_quat", "geom_dataid",
       "geom_friction", "geom_condim", "geom_priority", "geom_margin", "geom_solref", "geom_solimp",
+      "geom_contype", "geom_conaffinity", "geom_group", "site_pos", "site_size",
+      "sensor_type", "sensor_objtype", "sensor_objid", "sensor_dim", "names",
       "mesh_vert", "mesh_face",
     )
     for field in fields:
       with self.subTest(field=field):
-        np.testing.assert_array_equal(getattr(raw, field), getattr(adapted, field))
-    self.assertEqual(adapted.nsensor, 3)
-    np.testing.assert_array_equal(adapted.sensor("imu_ang_vel").type, raw.sensor("imu_gyro").type)
-    np.testing.assert_array_equal(adapted.sensor("imu_ang_vel").objid, raw.sensor("imu_gyro").objid)
+        np.testing.assert_array_equal(getattr(raw, field), getattr(loaded, field))
+    self.assertEqual(loaded.nsensor, 3)
     self.assertEqual(GO2W_XML.read_bytes(), before)
 
   def test_compiled_sensors_match_actual_task_references(self):
@@ -134,7 +118,6 @@ class Go2WTests(unittest.TestCase):
   def test_go2w_configurations_are_explicit_without_loops(self):
     paths = list(Path(go2w_env_cfgs.__file__).parent.glob("*.py"))
     paths.append(Path(__file__).parents[1] / "src/assets/robots/unitree_go2w/go2w_constants.py")
-    paths.append(Path(__file__).parents[1] / "src/assets/robots/unitree_go2w/model_adapter.py")
     loops = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
     for path in paths:
       for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):

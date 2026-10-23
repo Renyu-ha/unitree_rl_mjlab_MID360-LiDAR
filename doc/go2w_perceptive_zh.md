@@ -42,7 +42,7 @@ flowchart LR
 
 ## 2. Go2W 迁移内容
 
-训练实际加载的 `src/assets/robots/unitree_go2w/xmls/go2w.xml` 直接使用 [ZhongL1/unitree_rl_mjlab_go2w 的原始 XML](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`，文件 Git blob 哈希为 `ae8ab3e32e3043e06752009fdd33be20d74ccc85`，与源文件逐字节一致。17 份网格也与原仓库一致，独立放在 Go2W 的 `xmls/assets/`；不再维护改写版 XML。`model_adapter.py` 仅在内存中绑定碰撞体名称、轮毂 site 和当前任务的传感器名称，并保持轮子重复外观网格禁碰撞；原始 XML 的传感器声明不改，加载后移除未使用项：保留原始 gyro 并绑定为 `imu_ang_vel`，添加 Critic 使用的 `imu_lin_vel` 和奖励使用的 `root_angmom`，编译后仅 3 个传感器、9 个数值；不再计算未被训练读取的关节遥测、姿态、世界位置/速度和加速度计。关节状态仍直接读取仿真数据。连杆、质量、惯量、关节及碰撞形状直接来自原模型，既有训练配置和自碰撞设置继续生效。适配层同样使用显式声明，不包含循环或推导式。底层模型源于宇树官方 `unitree_mujoco`，来源、哈希清单和 BSD 许可证保存在 Go2W 资产目录。
+Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器仅保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量、关节与物理形状沿用参考模型，训练配置和自碰撞设置保持不变。来源与 BSD 许可证保存在 Go2W 资产目录。
 
 此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿/轮为 0.02，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。这次仅替换模型文件，以上参数及奖励、观测、地形、动作缩放、PPO 均保持不变。原模型的物理几何及网格内容已经与参考一致，替换本身不能视为 NaN 修复；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。
 
@@ -337,7 +337,5 @@ ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图�
 - 补上实时查看的几何分组控制，并新增 `scripts/viz_nan.py` 回放入口后，CPU 实际场景验证了 G2 外观/G3 碰撞体开关和 16 步画面同步；用合成转储验证了原始环境编号映射、回放滑块、网页响应及服务关闭。当时尚未取得训练机环境 610 的实际转储，此项验证不代表已确认该故障由穿透导致。
 - 收到环境 610 的实际转储后，确认保存姿态位于平地与下侧外圈接缝；外圈识别、高亮、逐帧接触报告已用该文件验证。24 项检查通过，边界对照选项通过 2 个 CPU 环境的短训练/ONNX 校验，以及实际越界后触发 timeout、回到网格内部且观测有限的检查。GPU 原始 NaN 的算法根因仍未复现确认。
 - 新增 ONNX 交互播放并启用自碰撞后，28 项检查通过。用户提供的 726→16 策略通过元数据校验，单个 MJWarp CPU 环境完成 150 个控制步（3 s 仿真）并跨过 Y=-24 接缝，观测和策略输出有限，重置回到指定位置。默认站姿无自身接触；折叠腿部测试在开启 1/1 掩码时产生轮轮接触，切回 1/0 时消失。该短测试不代表完整训练稳定性或 GPU NaN 根因已确认。
-- 仅替换模型文件后，30 项回归检查通过；源 XML 和全部 17 份网格的 Git blob 哈希与 ZhongL1 固定提交一致。六个任务的训练、回放和 PPO 配置共 18 组对比完全一致，编译后的物理参数与替换前保持一致。2 个 CPU 环境完成 32 个控制步，Actor `(2, 726)`、Critic `(2, 269)` 均有限；自碰撞测试继续通过。此次替换不代表 GPU NaN 已修复。
-- 改为直接加载原仓库 XML 后，运行用 `go2w.xml` 的 Git blob 哈希与参考完全一致，原始 53 个传感器全部保留。30 项回归检查通过；494 个编译模型字段及求解器选项与替换前一致，32 个 CPU MuJoCo 步的关节状态和 4 个任务传感器输出逐值一致。2 个 MJWarp CPU 环境完成 32 步，观测有限且维度不变；六个任务的 18 组环境/PPO 配置仍一致。
-- 清理冗余传感器后，运行时 XML 内置传感器从 57 个 / 76 个数值减到 3 个 / 9 个数值，仅保留 Actor/Critic 角速度、Critic 线速度和角动量奖励所需项。31 项回归检查通过，新增六个任务训练/回放传感器引用完整性检查。494 个编译模型字段保持一致，32 个 CPU MuJoCo 步的状态和 3 个保留传感器输出逐值一致；2 个 MJWarp CPU 环境完成 32 步，观测仍为 `(2, 726)` / `(2, 269)` 且有限。18 组环境/PPO 配置及原始 XML 哈希不变。
+- 固定为最终 XML 后，32 项检查通过：模型加载不再增删接口，只读取 XML 与网格；无用传感器和 3 份未使用网格已从文件中删除。155 个编译物理/接口字段与原实现一致，14 份保留网格的内容与参考一致；32 个 CPU MuJoCo 步的状态及全部传感器输出逐值一致。2 个 MJWarp CPU 环境完成 32 步，观测仍为 `(2, 726)` / `(2, 269)` 且有限。六个任务的训练、回放及 PPO 配置共 18 组保持一致；旧 MJB 几何检查已支持清理无用网格后的编号变化，同时继续校验实际使用的网格内容。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
