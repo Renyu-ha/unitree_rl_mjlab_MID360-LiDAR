@@ -10,8 +10,8 @@ from mjlab.utils.spec import create_velocity_actuator
 
 @dataclass(kw_only=True)
 class WheelVelocityActuatorCfg(ActuatorCfg):
-  damping: float = 0.5
-  effort_limit: float = 15.0
+  damping: float = 2.0
+  effort_limit: float = 45.0
   velocity_limit: float = 20.0
 
   def build(self, entity, target_ids, target_names):

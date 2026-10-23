@@ -69,14 +69,51 @@ class Go2WTests(unittest.TestCase):
       if "wheel" in name:
         self.assertFalse(joint.limited[0])
         self.assertAlmostEqual(model.actuator_biasprm[idx, 1], 0.0)
-        self.assertAlmostEqual(model.actuator_biasprm[idx, 2], -0.5)
-        self.assertAlmostEqual(model.actuator_forcerange[idx, 1], 15.0)
+        self.assertAlmostEqual(model.actuator_gainprm[idx, 0], 2.0)
+        self.assertAlmostEqual(model.actuator_biasprm[idx, 2], -2.0)
+        self.assertAlmostEqual(model.actuator_forcerange[idx, 1], 45.0)
         self.assertEqual(model.actuator_ctrlrange[idx].tolist(), [-20.0, 20.0])
+        self.assertAlmostEqual(model.dof_armature[joint.dofadr[0]], 0.02)
       else:
         self.assertTrue(joint.limited[0])
-        self.assertGreater(model.actuator_gainprm[idx, 0], 0.0)
+        calf = "calf" in name
+        kp, kd, effort, armature = (40.0, 2.0, 45.0, 0.02) if calf else (20.0, 1.0, 23.5, 0.01)
+        self.assertAlmostEqual(model.actuator_gainprm[idx, 0], kp)
+        self.assertAlmostEqual(model.actuator_biasprm[idx, 1], -kp)
+        self.assertAlmostEqual(model.actuator_biasprm[idx, 2], -kd)
+        self.assertEqual(model.actuator_forcerange[idx].tolist(), [-effort, effort])
+        self.assertAlmostEqual(model.dof_armature[joint.dofadr[0]], armature)
+      self.assertAlmostEqual(model.dof_frictionloss[joint.dofadr[0]], 0.0)
     self.assertEqual(len(self.robot.find_joints(LEG_JOINTS)[0]), 12)
     self.assertEqual(len(self.robot.find_joints(WHEEL_JOINTS)[0]), 4)
+
+  def test_initial_keyframe_matches_zhongl1_reference(self):
+    # ZhongL1/unitree_rl_mjlab_go2w @ fe0deea, asset INIT_STATE.
+    # Inspect compiled qpos by joint name to catch sign/order mapping mistakes.
+    qpos = self.model.key("init_state").qpos
+    self.assertEqual(qpos[:7].tolist(), [0.0, 0.0, 0.4, 1.0, 0.0, 0.0, 0.0])
+    for leg in ("FR", "FL", "RR", "RL"):
+      expected = {"hip": 0.1 if leg.endswith("R") else -0.1, "thigh": 0.9, "calf": -1.8, "wheel": 0.0}
+      for kind, value in expected.items():
+        name = f"{leg}_{kind}_joint"
+        with self.subTest(joint=name):
+          self.assertAlmostEqual(qpos[self.model.joint(name).qposadr[0]], value)
+
+  def test_reference_collisions_keep_only_named_physics_geoms(self):
+    # Reference FULL_COLLISION has condim=3, priority=0; no friction override.
+    for geom_id in range(self.model.ngeom):
+      geom = self.model.geom(geom_id)
+      with self.subTest(geom=geom.name):
+        if "_collision" in geom.name:
+          self.assertEqual(int(geom.condim[0]), 3)
+          self.assertEqual(int(geom.priority[0]), 0)
+          self.assertEqual(int(geom.contype[0]), 1)
+          self.assertEqual(int(geom.conaffinity[0]), 0)
+          if "wheel_link" in geom.name:
+            self.assertEqual(geom.friction.tolist(), [0.8, 0.02, 0.01])
+        else:
+          self.assertEqual(int(geom.contype[0]), 0)
+          self.assertEqual(int(geom.conaffinity[0]), 0)
 
   def test_registered_tasks_and_compatible_stages(self):
     tasks = [name for name in list_tasks() if name.startswith("Unitree-Go2W-")]

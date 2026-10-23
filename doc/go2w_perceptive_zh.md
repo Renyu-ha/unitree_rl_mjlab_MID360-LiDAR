@@ -44,13 +44,15 @@ flowchart LR
 
 机器人来自宇树官方 [unitree_mujoco Go2W 模型](https://github.com/unitreerobotics/unitree_mujoco/tree/1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d/unitree_robots/go2w)，保留链路变换、质量、惯量与关节范围。来源和 BSD 许可证保存在 `src/assets/robots/unitree_go2w/`。网格文件可直接使用，共用的 Go2 外观网格通过相对路径引用。
 
+2026-10-23 起，机器人配置和初始姿态对齐 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿/轮为 0.02，执行器 frictionloss 为 0。碰撞按参考 `FULL_COLLISION` 的有效默认值采用 `condim=3`、`priority=0`，摩擦继承 XML。模型几何和三份 Go2W STL 与参考一致，无需重复替换网格；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。
+
 | 项目 | Go2W 实现 |
 | --- | --- |
 | 机器人 | 12 个腿关节 + 4 个连续轮关节，浮动基座 |
 | 动作前 12 维 | 腿关节默认姿态 + `0.5 * action` rad |
 | 动作后 4 维 | `20 * action` rad/s 的轮子速度目标，零偏置 |
 | 动作裁剪 | 归一化动作限制在 [-1, 1]，在缩放之前裁剪 |
-| 执行器 | 腿使用 PD 位置控制，轮子使用速度控制；轮子力矩上限 15 Nm |
+| 执行器 | 腿使用 PD 位置控制，轮子使用速度控制；轮子力矩上限 45 Nm，参数对齐 ZhongL1 参考资产 |
 | 关节观测 | 12 维腿位置、12 维腿速度、4 维轮速度；不输入累计轮转角 |
 | 奖励 | 姿态和关节位置限制只选腿关节；加入轮子停转与速度代价 |
 | 接触打滑 | 参考 `robot_lab.wheel_spin_contact`，以当前法向接触力门控轮周速度与轮体 COM 平移速度的差值 |
@@ -72,6 +74,8 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 上面省略 `_joint` 后缀。这与 SDK 的电机顺序不同，实机适配必须使用导出的 `action_joint_names` 映射，不能直接把 16 维动作按索引发给 SDK。
 
 感知任务 Actor 单帧 242 维，3 帧展平后 **726 维**；Critic **269 维**；动作 **16 维**。mjlab 先展平每个观测项的历史再拼接各项，并非把三个完整帧直接拼在一起。平地任务移除高度图，Actor **165 维**、Critic **82 维**。粗糙地形 / v1 / v2 / 精调的观测项顺序与维度保持一致，可以恢复同一 Go2W 系列 checkpoint。Go2/G1 checkpoint 不能直接加载，Go2W Flat checkpoint 也不能直接用于感知任务。
+
+本次对齐范围是机器人资产与初始状态。感知课程、robot_lab 空转奖励及现有动作/观测顺序继续使用本仓库配置；轮动作缩放保留 20 rad/s，参考仓库混合动作 task 使用的是 35 rad/s。对齐前后的 checkpoint 张量形状相同，但默认姿态偏置和执行器动力学已改变，建议使用新运行从头训练，避免把旧策略行为当作新配置的验证结果。
 
 新文件入口：
 
@@ -180,3 +184,11 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 - 当前机器无可用 NVIDIA CUDA 驱动，未进行 GPU 性能验证、完整收敛训练或真机测试。上述冒烟模型仅用于验证程序链路，不是可部署的训练成果。
 - 替换为 robot_lab 接触空转奖励后，重新通过 11 项回归检查，并在 2 个环境、最终稀疏感知阶段完成 8 步仿真、1 次 PPO 更新和 ONNX 校验；观测及动作维度保持兼容。
 - 移除 Go2 任务配置依赖后，逐项对比六个任务的训练环境、回放环境及 PPO 配置，共 18 组完整配置与修改前完全一致；另在 2 个环境、最终稀疏感知阶段加载已有 checkpoint，完成 8 步仿真、1 次 PPO 更新及 ONNX 校验。
+
+2026-10-23 参考资产对齐后的本地验证（Windows、CPU）：
+
+- 15 项回归检查通过，新增编译后初始 `qpos` 的逐关节校验，以及碰撞维度、优先级和可视网格禁碰撞检查；执行器的 KP/KD、力矩上限、armature 和 frictionloss 均检查实际编译值。
+- 对照固定参考提交逐项检查，17 个机体的变换、惯量和几何、17 份网格的 Git blob 哈希、16 个关节初值及执行器参数匹配。六个任务共 18 组对比确认，机器人资产以外的环境配置和 PPO 配置没有变化。
+- 正式 `scripts/train.py` 入口以 16 个环境完成 32 次 PPO 迭代，开启物理 NaN guard 和 Actor/Critic 逐项严格检查，全程未出现 NaN/Inf，checkpoint 与 ONNX 正常生成。使用当前默认 Newton 求解器，没有附加 CG 覆盖。
+- 最终稀疏感知阶段以 4 个环境完成 16 个控制步、1 次 PPO 更新和 ONNX 格式/动作元数据校验，观测维度仍为 Actor `(4, 726)`、Critic `(4, 269)`。
+- 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。

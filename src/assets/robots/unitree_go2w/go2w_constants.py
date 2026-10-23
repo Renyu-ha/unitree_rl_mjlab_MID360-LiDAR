@@ -1,4 +1,8 @@
-"""Go2W model and mixed position/velocity actuators for mjlab 1.2.0."""
+"""Go2W asset settings aligned with ZhongL1/unitree_rl_mjlab_go2w.
+
+See SOURCE.md for the pinned reference and mjlab 1.2.0 compatibility adapters.
+The reference configuration is distributed under Apache-2.0.
+"""
 
 from pathlib import Path
 
@@ -33,16 +37,24 @@ def get_spec() -> mujoco.MjSpec:
 
 
 def get_go2w_robot_cfg() -> EntityCfg:
-  """Return an independent config; wheels are continuous velocity-controlled joints."""
+  """Return fresh reference asset settings with continuous velocity-controlled wheels."""
   return EntityCfg(
     spec_fn=get_spec,
     init_state=EntityCfg.InitialStateCfg(
-      pos=(0.0, 0.0, 0.42),
+      pos=(0.0, 0.0, 0.4),
       joint_pos={
-        ".*L_hip_joint": 0.1,
-        ".*R_hip_joint": -0.1,
-        ".*thigh_joint": 0.8,
-        ".*calf_joint": -1.5,
+        "FR_hip_joint": 0.1,
+        "FR_thigh_joint": 0.9,
+        "FR_calf_joint": -1.8,
+        "FL_hip_joint": -0.1,
+        "FL_thigh_joint": 0.9,
+        "FL_calf_joint": -1.8,
+        "RR_hip_joint": 0.1,
+        "RR_thigh_joint": 0.9,
+        "RR_calf_joint": -1.8,
+        "RL_hip_joint": -0.1,
+        "RL_thigh_joint": 0.9,
+        "RL_calf_joint": -1.8,
         ".*wheel_joint": 0.0,
       },
       joint_vel={".*": 0.0},
@@ -50,16 +62,20 @@ def get_go2w_robot_cfg() -> EntityCfg:
     articulation=EntityArticulationInfoCfg(
       actuators=(
         BuiltinPositionActuatorCfg(
-          target_names_expr=(".*_(hip|thigh)_joint",),
-          stiffness=30.0, damping=1.0, effort_limit=23.7, armature=0.01,
+          target_names_expr=(".*_hip_joint",),
+          stiffness=20.0, damping=1.0, effort_limit=23.5, armature=0.01,
+        ),
+        BuiltinPositionActuatorCfg(
+          target_names_expr=(".*_thigh_joint",),
+          stiffness=20.0, damping=1.0, effort_limit=23.5, armature=0.01,
         ),
         BuiltinPositionActuatorCfg(
           target_names_expr=(".*_calf_joint",),
-          stiffness=40.0, damping=1.5, effort_limit=45.43, armature=0.02,
+          stiffness=40.0, damping=2.0, effort_limit=45.0, armature=0.02,
         ),
         WheelVelocityActuatorCfg(
           target_names_expr=WHEEL_JOINTS,
-          damping=0.5, effort_limit=15.0, armature=0.01, frictionloss=0.01,
+          damping=2.0, effort_limit=45.0, armature=0.02,
           velocity_limit=WHEEL_ACTION_SCALE,
         ),
       ),
@@ -68,8 +84,8 @@ def get_go2w_robot_cfg() -> EntityCfg:
     collisions=(CollisionCfg(
       geom_names_expr=(r".*_collision\d*$",),
       contype=1, conaffinity=0,
-      condim={r".*_wheel_link_collision": 6, r"(?!.*_wheel_link).*_collision\d*": 1},
-      priority={r".*_wheel_link_collision": 1},
-      friction={r".*_wheel_link_collision": (0.8, 0.02, 0.001)},
+      # The reference FULL_COLLISION uses CollisionCfg's condim=3, priority=0
+      # defaults. Keep the MJCF friction coefficients without extra overrides.
+      condim=3, priority=0,
     ),),
   )
