@@ -61,6 +61,7 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
         camera_elevation=env.cfg.viewer.elevation,
         show_debug_viz_control=False,
       )
+      self._scene.create_groups_gui(self._server.gui.add_tab_group())
     except BaseException:
       self._server.stop()
       raise

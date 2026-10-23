@@ -180,10 +180,12 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 这张表是检查入口，首个报错项也可能是上游错误的结果，不能只凭项名判定根因。保存终端中第一条 NaN/Inf 报错、环境编号和此前的 MuJoCo/Warp warning；若 guard 产生了转储，保留同一时间的 `.npz` 与 `.mjb`。可用以下命令在浏览器回看发散前的状态：
 
 ```bash
-python -m mjlab.scripts.nan_viz logs/go2w_nan_dump/nan_dump_latest.npz
+python scripts/viz_nan.py logs/go2w_nan_dump/nan_dump_latest.npz
 ```
 
-该回放帮助检查异常姿态，不包含完整训练随机状态、动作序列和每个 GPU 环境的随机化参数。若要对比 Newton/CG，先保留原设置抓一次，再用 `--env.sim.mujoco.solver=cg` 单独做对照，不能将换求解器后暂未报错当作根因已确认。
+本地回放入口沿用 mjlab 的 NaN 查看器，并补上 `Groups` 几何分组控制。在 `Groups → Geoms` 中关闭 `G2`（Go2W 外观网格），开启 `G3`（真实碰撞体），保留 `G0/G1` 地形。`Contacts → Points/Forces` 显示 CPU 重算的接触点和力。通过 `Playback → Step` 逐帧查看，页面 `Environment` 信息显示原始环境编号；只转储一个环境时，回放索引 0 就是该环境，不需要选择其原始编号。
+
+例如日志记录的环境 610，应打开同一时间配套的 `nan_dump_20261023_115651.npz` 与 `model_20261023_115651.mjb`；把最后若干帧来回拖动，查看轮、腿、机身与台阶的相对位置。检查时应看碰撞体，而非只看外观网格之间是否重叠。guard 在每个物理步执行前捕获状态，最后一帧未必包含异常发生后的姿态；没有看到明显穿透也不能排除单步接触数值异常。该回放不包含完整训练随机状态、动作序列和每个 GPU 环境的随机化参数，CPU 重算的接触也不等于原始 Warp 接触记录。若要对比 Newton/CG，先保留原设置抓一次，再用 `--env.sim.mujoco.solver=cg` 单独做对照，不能将换求解器后暂未报错当作根因已确认。
 
 训练机暂时无法联网时，将 `WANDB_MODE=offline`，其余 W&B 参数保留；联网后运行 `wandb sync wandb/offline-run-<本次运行目录>`。W&B 离线目录与 `logs/rsl_rl/...` 目录是两种不同的数据，不应把普通 TensorBoard 目录直接当作 W&B 离线运行目录同步。
 
@@ -209,7 +211,7 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 本机浏览器打开终端打印的地址，默认 `http://127.0.0.1:8080`。服务器训练时，可在自己电脑执行 `ssh -N -L 8080:127.0.0.1:8080 用户名@服务器地址`，再打开同一地址；也可以显式设置 `--viewer-host=0.0.0.0` 后访问 `http://服务器地址:8080`。端口可用 `--viewer-port=8081` 修改，以终端打印的实际端口为准。
 
-页面可选择训练环境，开启 `Sensors and commands` 显示已启用调试绘制的射线和指令，并切换碰撞几何、接触点/力与相机跟随。接触显示沿用 mjlab 的 CPU MuJoCo 可视化重算，不应当作训练 Warp 接触数据的逐值验证。页面只同步所选环境，默认最多每秒 15 帧，可用 `--viewer-fps=10` 调低；无浏览器连接时跳过后续画面同步。可视化增加一定同步开销，显示的是加速训练过程，PPO 更新阶段画面会暂时停留。
+页面用 `Training environment` 选择训练环境，也可用 `--env.viewer.env-idx=610` 指定初始查看环境。`Groups → Geoms` 中关闭 `G2`、开启 `G3` 可直接查看 Go2W 碰撞体；检查某次 NaN 的异常环境优先使用上面的逐帧回放，因为实时显示会跳过大量加速仿真步，且后续运行的同一环境编号未必再次异常。开启 `Sensors and commands` 显示已启用调试绘制的射线和指令，并可切换接触点/力与相机跟随。接触显示沿用 mjlab 的 CPU MuJoCo 可视化重算，不应当作训练 Warp 接触数据的逐值验证。页面只同步所选环境，默认最多每秒 15 帧，可用 `--viewer-fps=10` 调低；无浏览器连接时跳过后续画面同步。可视化增加一定同步开销，显示的是加速训练过程，PPO 更新阶段画面会暂时停留。
 
 默认 `--viewer=none`。多 GPU 仅 rank 0 创建页面；页面不会额外执行策略、推进仿真或重置训练环境，Go2W 的显式配置保持不变。训练结束或中断时自动关闭查看服务。
 
@@ -294,4 +296,5 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 - 简化为普通 `feet_ground_contact` 总力门控后，当前 16 项回归检查全部通过，覆盖严格 `> 1 N` 阈值、任意方向总力及脱离后历史力不生效。最终稀疏阶段以 4 个 CPU 环境完成 16 步仿真、1 次 PPO 更新和 ONNX 校验，Actor/Critic 维度保持 `(4, 726)` / `(4, 269)`。
 - 加入训练实时查看后，19 项回归检查通过。2 个 CPU 环境在最终稀疏阶段完成 16 次画面同步，验证网页 HTTP 响应、训练环境切换、射线/指令及接触显示，关闭后端口释放；正式 `scripts/train.py --viewer=viser` 入口完成 1 次 PPO 更新并正常关闭服务。尚未在目标训练机验证 GPU 或多 GPU 可视化性能。
 - 验证严格 NaN 定位时，向环境 1 的接触力观测人为注入 NaN，实际报错准确包含 `critic/foot_contact_forces` 与 `[1]`；物理 `qpos/qvel` 仍有限。兼容 W&B 0.28.2 后，2 个 CPU 环境在开启物理 guard 和 Actor/Critic 逐项检查时完成 1 次 PPO 更新，W&B 离线运行写入指标、配置和 `.pt` checkpoint；19 项检查及依赖一致性检查通过。没有使用账号做云端上传测试，这些验证也不代表训练机第 234 轮 NaN 的根因已确认。
+- 补上实时查看的几何分组控制，并新增 `scripts/viz_nan.py` 回放入口后，CPU 实际场景验证了 G2 外观/G3 碰撞体开关和 16 步画面同步；用合成转储验证了原始环境编号映射、回放滑块、网页响应及服务关闭。未取得训练机环境 610 的实际转储，此项验证不代表已确认该故障由穿透导致。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
