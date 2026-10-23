@@ -9,11 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import mujoco
 import torch
 from mjlab.entity import Entity
-from mjlab.sensor import ContactMatch, GridPatternCfg
-from mjlab.sensor.contact_sensor import ContactData
+from mjlab.sensor import ContactSensorCfg, GridPatternCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 
 import src.tasks  # noqa: F401 -- register repository tasks
@@ -23,9 +21,6 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
 from src.tasks.velocity.config.go2w import env_cfgs as go2w_env_cfgs
-from src.assets.robots.unitree_go2w.contact_sensor import (
-  WheelGroundContactSensor, WheelGroundContactSensorCfg, aggregate_wheel_contacts,
-)
 
 
 class Go2WTests(unittest.TestCase):
@@ -166,13 +161,13 @@ class Go2WTests(unittest.TestCase):
     spin_sensor = next(s for s in cfg.scene.sensors if s.name == spin.params["sensor_name"])
     self.assertIs(spin_sensor, sensor)
     self.assertEqual([s.name for s in cfg.scene.sensors], ["terrain_scan", "feet_ground_contact", "nonfoot_ground_touch"])
-    self.assertIsInstance(spin_sensor, WheelGroundContactSensorCfg)
+    self.assertIs(type(spin_sensor), ContactSensorCfg)
     self.assertEqual(spin_sensor.primary.pattern, sensor.primary.pattern)
-    self.assertEqual(spin_sensor.reduce, "none")
-    self.assertEqual(spin_sensor.num_slots, cfg.sim.contact_sensor_maxmatch)
+    self.assertEqual(spin_sensor.reduce, "netforce")
+    self.assertEqual(spin_sensor.num_slots, 1)
     self.assertFalse(spin_sensor.global_frame)
     self.assertTrue(spin_sensor.track_air_time)
-    self.assertEqual(spin_sensor.fields, ("found", "force", "normal", "tangent"))
+    self.assertEqual(spin_sensor.fields, ("found", "force"))
     bodies = self.robot.find_bodies(spin.params["body_cfg"].body_names)[1]
     joints = self.robot.find_joints(spin.params["joint_cfg"].joint_names)[1]
     self.assertEqual([n[:2] for n in geoms], [n[:2] for n in bodies])
@@ -222,7 +217,7 @@ class Go2WTests(unittest.TestCase):
     forces[:, :, 2] = 2.0 if contact else 0.0
     return SimpleNamespace(
       scene={"robot": SimpleNamespace(data=data), "contact": SimpleNamespace(
-        data=SimpleNamespace(force=forces.clone(), net_normal_force_w=forces))},
+        data=SimpleNamespace(force=forces))},
       command_manager=SimpleNamespace(get_command=lambda name: torch.zeros(2, 3)),
     )
 
@@ -241,95 +236,32 @@ class Go2WTests(unittest.TestCase):
     )
 
   def test_spin_matches_robot_lab_reference_fixture(self):
-    # Same numerical case as robot_lab/tests/test_backend_configuration_update.py.
+    # Same spin-formula fixture as robot_lab/tests/test_backend_configuration_update.py.
+    # Contact gating here intentionally uses total force, including friction.
     env = self._rolling_env(speed=0.0, spin=0.0, contact=False, num_wheels=3)
     env.scene["robot"].data.joint_vel = torch.tensor([[1., 2., 3.], [4., 1., 0.]])
     env.scene["robot"].data.body_com_lin_vel_w[0, 2, 0] = 0.12
-    env.scene["contact"].data.net_normal_force_w[:, [0, 2], 2] = 2.0
+    env.scene["contact"].data.force[:, [0, 2], 2] = 2.0
     torch.testing.assert_close(self._spin_cost(env, radius=0.1), torch.tensor([0.02, 0.22]))
 
-  def test_spin_gate_uses_current_normal_force_only(self):
+  def test_spin_gate_uses_current_net_contact_force(self):
     env = self._rolling_env(speed=0.0, spin=10.0, contact=False)
     data = env.scene["contact"].data
-    data.force[..., :2] = 100.0  # total/friction force must not gate this reward
     torch.testing.assert_close(self._spin_cost(env), torch.zeros(2))
-    data.net_normal_force_w[..., 2] = 1.0  # robot_lab uses a strict > 1 N comparison
+    data.force[..., 2] = 1.0  # Keep a strict > 1 N deadband for small forces.
     torch.testing.assert_close(self._spin_cost(env), torch.zeros(2))
-    data.net_normal_force_w[..., 2] = 0.0
-    data.net_normal_force_w[..., 0] = 1.2  # contact with a stair face
+    data.force[..., 2] = 1.2
+    self.assertTrue(torch.all(self._spin_cost(env) > 0))
+    data.force.zero_()
+    data.force[..., 0] = 1.2  # Contact force in any direction can activate the gate.
+    self.assertTrue(torch.all(self._spin_cost(env) > 0))
+    data.force.zero_()
+    data.force[..., :2] = 0.8  # Threshold applies to vector magnitude.
     self.assertTrue(torch.all(self._spin_cost(env) > 0))
     # Historical contact cannot keep this reward active after detachment.
     data.force_history = torch.full((2, 32, 4, 3), 100.0)
-    data.net_normal_force_w.zero_()
+    data.force.zero_()
     torch.testing.assert_close(self._spin_cost(env), torch.zeros(2))
-
-  def _raw_contact_fixture(self):
-    force = torch.zeros(2, 4, 8, 3)
-    normal = torch.zeros_like(force)
-    tangent = torch.zeros_like(force)
-    found = torch.zeros(2, 4, 8)
-    force[0, :, 0] = torch.tensor([2., 3., 4.])
-    normal[0, :, 0] = torch.tensor([0., 0., 1.])
-    tangent[0, :, 0] = torch.tensor([1., 0., 0.])
-    force[0, :, 1] = torch.tensor([1., 5., 6.])
-    normal[0, :, 1] = torch.tensor([1., 0., 0.])
-    tangent[0, :, 1] = torch.tensor([0., 1., 0.])
-    found[0, :, :2] = 2.0
-    return ContactData(
-      found=found.flatten(1, 2), force=force.flatten(1, 2),
-      normal=normal.flatten(1, 2), tangent=tangent.flatten(1, 2),
-    )
-
-  def test_shared_ground_sensor_separates_normal_and_total_forces(self):
-    data = aggregate_wheel_contacts(self._raw_contact_fixture(), 8)
-    self.assertEqual(tuple(data.force.shape), (2, 4, 3))
-    torch.testing.assert_close(data.force[0], torch.tensor([[4., 9., 8.]]).expand(4, 3))
-    torch.testing.assert_close(data.net_normal_force_w[0], torch.tensor([[1., 0., 2.]]).expand(4, 3))
-    torch.testing.assert_close(data.force[1], torch.zeros(4, 3))
-    torch.testing.assert_close(data.net_normal_force_w[1], torch.zeros(4, 3))
-    torch.testing.assert_close(data.found, torch.tensor([[2.] * 4, [0.] * 4]))
-    # MuJoCo flips normal/tangent and the third force component for the other
-    # side of a contact; the world force must flip as a whole.
-    raw = self._raw_contact_fixture()
-    raw.force[1, 0] = torch.tensor([2., 3., -4.])
-    raw.normal[1, 0] = torch.tensor([0., 0., -1.])
-    raw.tangent[1, 0] = torch.tensor([-1., 0., 0.])
-    data = aggregate_wheel_contacts(raw, 8)
-    torch.testing.assert_close(data.force[1, 0], torch.tensor([-3., -4., -2.]))
-    torch.testing.assert_close(data.net_normal_force_w[1, 0], torch.tensor([0., 0., -2.]))
-
-  def test_shared_ground_sensor_air_time_remains_per_wheel(self):
-    cfg = WheelGroundContactSensorCfg(
-      name="feet_ground_contact", primary=ContactMatch(mode="geom", pattern="wheel"),
-      fields=("found", "force", "normal", "tangent"), reduce="none", num_slots=8,
-      track_air_time=True,
-    )
-    sensor = WheelGroundContactSensor(cfg)
-    sensor._data = SimpleNamespace(time=torch.full((2,), 0.02))
-    sensor._air_time_state = SimpleNamespace(
-      current_air_time=torch.full((2, 4), 0.02), last_air_time=torch.zeros(2, 4),
-      current_contact_time=torch.zeros(2, 4), last_contact_time=torch.zeros(2, 4),
-      last_time=torch.zeros(2),
-    )
-    data = aggregate_wheel_contacts(self._raw_contact_fixture(), 8)
-    with patch.object(sensor, "_extract_sensor_data", return_value=data):
-      sensor._update_air_time_tracking()
-      data = sensor._compute_data()
-    self.assertEqual(tuple(data.current_air_time.shape), (2, 4))
-    torch.testing.assert_close(data.current_air_time[0], torch.zeros(4))
-    torch.testing.assert_close(data.current_air_time[1], torch.full((4,), 0.04))
-    self.assertTrue(sensor.compute_first_contact(0.02)[0].all())
-    self.assertFalse(sensor.compute_first_contact(0.02)[1].any())
-
-  def test_shared_ground_sensor_packs_fields_in_one_backend_sensor_per_wheel(self):
-    cfg = load_env_cfg("Unitree-Go2W-Flat").scene.sensors[0]
-    sensor = cfg.build()
-    spec = mujoco.MjSpec()
-    spec.compile()  # Scene may already have compiled before sensors are added.
-    sensor.edit_spec(spec, {"robot": self.robot})
-    self.assertEqual(len(spec.sensors), 4)
-    for backend in spec.sensors:
-      self.assertEqual(backend.intprm[:3].tolist(), [99, 0, 128])
 
   def test_zero_command_brakes_wheels(self):
     env = self._rolling_env()

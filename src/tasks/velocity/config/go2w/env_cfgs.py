@@ -26,7 +26,6 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   LEG_ACTION_SCALE, LEG_JOINTS, WHEEL_ACTION_SCALE, WHEEL_BODIES,
   WHEEL_GEOMS, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
 )
-from src.assets.robots.unitree_go2w.contact_sensor import WheelGroundContactSensorCfg
 from src.tasks.velocity import mdp
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
 from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
@@ -104,15 +103,11 @@ def _make_go2w_env_cfg(
     max_distance=5.0, exclude_parent_body=True, debug_vis=True,
     viz=RayCastSensorCfg.VizCfg(show_normals=True),
   )
-  feet_ground_cfg = WheelGroundContactSensorCfg(
+  feet_ground_cfg = ContactSensorCfg(
     name="feet_ground_contact",
     primary=ContactMatch(mode="geom", pattern=WHEEL_GEOMS, entity="robot"),
     secondary=ContactMatch(mode="body", pattern="terrain"),
-    # One sensor returns per-wheel total forces for the critic/landing reward
-    # and normal-only forces for robot_lab's contact-spin gate.
-    fields=("found", "force", "normal", "tangent"),
-    # Match the simulation contact capacity so the shared total force is not truncated.
-    reduce="none", num_slots=128, track_air_time=True,
+    fields=("found", "force"), reduce="netforce", num_slots=1, track_air_time=True,
   )
   nonfoot_ground_cfg = ContactSensorCfg(
     name="nonfoot_ground_touch",

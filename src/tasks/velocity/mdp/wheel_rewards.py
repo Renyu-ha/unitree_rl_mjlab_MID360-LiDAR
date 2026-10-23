@@ -22,16 +22,17 @@ def wheel_spin_contact(
   body_cfg: SceneEntityCfg,
   contact_threshold: float = 1.0,
 ) -> torch.Tensor:
-  """Port robot_lab's wheel_spin_contact using the shared wheel-ground sensor.
+  """Adapt robot_lab's spin formula using the shared wheel-ground sensor.
 
   Cost per grounded wheel is max(0.8 * R * abs(joint_speed) - COM_speed -
-  0.1, 0). Contact uses the current net normal reaction magnitude > threshold,
-  matching robot_lab rather than gating on tangential friction or history.
+  0.1, 0). Contact uses the current net contact force magnitude > threshold,
+  including friction. Unlike robot_lab's normal-only gate, this only needs to
+  detect contact; historical force does not keep a detached wheel active.
 
-  The shared feet_ground_contact sensor supplies net_normal_force_w separately
-  from its total force used by critic observations and landing rewards. Its
-  primaries must have the same order as body_cfg and joint_cfg. No contact
-  position or angular-velocity correction is used.
+  The ordinary feet_ground_contact netforce sensor is also used by critic
+  observations and landing rewards. Its primaries must have the same order as
+  body_cfg and joint_cfg. No contact position or angular-velocity correction
+  is used.
   """
   if wheel_radius <= 0.0 or contact_threshold < 0.0:
     raise ValueError("wheel_radius must be positive and contact_threshold non-negative")
@@ -41,10 +42,10 @@ def wheel_spin_contact(
   if wheel_ang_vel.shape != wheel_lin_vel.shape[:2]:
     raise ValueError("Wheel joint and body selections must have matching dimensions")
   sensor = env.scene[sensor_name]
-  net_normal_force = sensor.data.net_normal_force_w
-  if net_normal_force is None or net_normal_force.shape != (*wheel_ang_vel.shape, 3):
-    raise ValueError("Shared wheel-ground sensor must provide one normal force per wheel")
-  contact = net_normal_force.norm(dim=-1) > contact_threshold
+  net_force = sensor.data.force
+  if net_force is None or net_force.shape != (*wheel_ang_vel.shape, 3):
+    raise ValueError("Wheel-ground sensor must provide one net contact force per wheel")
+  contact = net_force.norm(dim=-1) > contact_threshold
   wheel_speed = wheel_lin_vel.norm(dim=-1)
   spin = (0.8 * wheel_radius * wheel_ang_vel.abs() - wheel_speed - 0.1).clamp_min(0.0)
   return (spin * contact).sum(dim=-1)
