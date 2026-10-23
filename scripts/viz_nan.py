@@ -7,6 +7,7 @@ import tyro
 
 import mjlab
 from mjlab.scripts.nan_viz import NanDumpViewer
+from src.utils.border_inspection import add_border_inspection
 
 
 def visualize(dump_path: tyro.conf.Positional[str]) -> None:
@@ -14,6 +15,7 @@ def visualize(dump_path: tyro.conf.Positional[str]) -> None:
   try:
     viewer.setup()
     viewer.scene.create_groups_gui(viewer.server.gui.add_tab_group())
+    add_border_inspection(viewer)
     viewer.server.gui.add_markdown(
       "Go2W collision inspection: in **Groups → Geoms**, disable **G2** "
       "(visual mesh) and enable **G3** (collision shapes). Keep **G0/G1** "
