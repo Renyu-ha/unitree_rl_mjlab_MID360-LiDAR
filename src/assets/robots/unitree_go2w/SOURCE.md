@@ -21,10 +21,12 @@ The initial state, servo parameters and collision settings follow [ZhongL1/unitr
 | Wheel velocity gain / effort / armature | `2` / `45` Nm / `0.02` |
 | Actuator friction loss | `0` (reference actuator default) |
 | Collision contact dimension / priority | `3` / `0` (reference `CollisionCfg` defaults) |
-| Collision filtering | `contype=1`, `conaffinity=0`; visual collisions disabled |
+| Collision filtering | `contype=1`, `conaffinity=1`; self collision enabled; visual collisions disabled |
 | Friction | Inherited from MJCF, including wheel `(0.8, 0.02, 0.01)` |
 
 The reference uses the same Go2W link geometry, masses and inertias; the three Go2W STL files have identical Git blob hashes. Local names for collision geoms, wheel-hub sites and sensors are retained for the perceptive task. The mjlab 1.2.0 continuous-wheel adapter is also retained to give velocity servos a usable control range.
+
+At the user's request, robot collision affinity is now `1` rather than the reference's `0`. Non-adjacent robot links can collide; MuJoCo's default same-body and parent-child filtering remains enabled. This applies to all Go2W training/play tasks. The default standing pose has no self contacts; a folded-leg fixture produces wheel-to-wheel and wheel-to-calf contacts. Policies trained with affinity `0` have compatible interfaces but different contact dynamics and should be retrained or fine-tuned with the new settings. Previously saved MJB dumps retain their original masks.
 
 The single `feet_ground_contact` uses ordinary mjlab `ContactSensorCfg` with `fields=("found", "force")`, `reduce="netforce"`, `num_slots=1` and per-wheel contact timing. Critic observations, landing rewards and the spin gate share its total world-space contact force. The gate uses the current force magnitude > 1 N, including friction; this intentionally differs from robot_lab's normal-only gate while retaining its spin formula. No custom contact adapter or separate spin-contact sensor is needed.
 

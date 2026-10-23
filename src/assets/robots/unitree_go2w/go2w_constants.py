@@ -91,7 +91,9 @@ def get_go2w_robot_cfg() -> EntityCfg:
     ),
     collisions=(CollisionCfg(
       geom_names_expr=(r".*_collision\d*$",),
-      contype=1, conaffinity=0,
+      # Enable robot-to-robot contacts as well as robot-to-terrain contacts.
+      # MuJoCo retains its default same-body / parent-child contact filtering.
+      contype=1, conaffinity=1,
       # The reference FULL_COLLISION uses CollisionCfg's condim=3, priority=0
       # defaults. Keep the MJCF friction coefficients without extra overrides.
       condim=3, priority=0,

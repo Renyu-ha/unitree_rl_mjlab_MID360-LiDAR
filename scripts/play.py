@@ -23,6 +23,8 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
   checkpoint_file: str | None = None
+  onnx_file: str | None = None
+  """Exported Go2W actor; use instead of checkpoint_file."""
   motion_file: str | None = None
   num_envs: int | None = None
   device: str | None = None
@@ -32,6 +34,17 @@ class PlayConfig:
   video_width: int | None = None
   camera: int | str | None = None
   viewer: Literal["auto", "native", "viser"] = "auto"
+  viewer_host: str = "127.0.0.1"
+  viewer_port: int = 8080
+  start_paused: bool = False
+  inspect_border: bool = False
+  """Use the seeded training terrain, fixed spawn and no automatic resets/DR."""
+  reference_model: str | None = None
+  """Verify regenerated geometry against a NaN guard MJB before policy play."""
+  spawn_position: tuple[float, float, float] = (-24.2, -23.0, 0.4)
+  spawn_yaw: float = -1.5707963267948966
+  perception_step: int | None = None
+  """Fixed perception curriculum step (iterations * 24); 0 matches early training."""
   no_terminations: bool = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
 
@@ -46,6 +59,23 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_rl_cfg(task_id)
+  if cfg.onnx_file is not None and (cfg.checkpoint_file is not None or cfg.agent != "trained"):
+    raise ValueError("Use onnx_file alone with agent=trained")
+  if cfg.inspect_border:
+    from src.utils.border_play import configure_border_play
+    if cfg.num_envs not in (None, 1):
+      raise ValueError("Border inspection uses one environment")
+    configure_border_play(env_cfg, load_env_cfg(task_id), cfg.spawn_position, cfg.spawn_yaw)
+  if cfg.perception_step is not None:
+    if cfg.perception_step < 0:
+      raise ValueError("perception_step must be nonnegative")
+    scan = env_cfg.observations["actor"].terms.get("height_scan")
+    if scan is None or "fixed_curriculum_step" not in scan.params:
+      raise ValueError("perception_step requires the perceptive v2 height scan")
+    scan.params["fixed_curriculum_step"] = cfg.perception_step
+  if cfg.onnx_file is not None or cfg.inspect_border:
+    from src.utils.border_play import configure_play_commands
+    configure_play_commands(env_cfg)
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE
@@ -85,8 +115,8 @@ def run_play(task_id: str, cfg: PlayConfig):
   resume_path: Path | None = None
   if TRAINED_MODE:
     log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
-    if cfg.checkpoint_file is not None:
-      resume_path = Path(cfg.checkpoint_file)
+    if cfg.checkpoint_file is not None or cfg.onnx_file is not None:
+      resume_path = Path(cfg.onnx_file or cfg.checkpoint_file)
       if not resume_path.exists():
         raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
       print(f"[INFO]: Loading checkpoint: {resume_path.name}")
@@ -120,6 +150,9 @@ def run_play(task_id: str, cfg: PlayConfig):
       "[WARN] Video recording with dummy agents is disabled (no checkpoint/log_dir)."
     )
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
+  if cfg.reference_model is not None:
+    from src.utils.border_play import verify_reference_geometry
+    verify_reference_geometry(env.sim.mj_model, cfg.reference_model)
 
   if TRAINED_MODE and cfg.video:
     print("[INFO] Recording videos during play")
@@ -151,6 +184,10 @@ def run_play(task_id: str, cfg: PlayConfig):
           return 2 * torch.rand(action_shape, device=env.unwrapped.device) - 1
 
       policy = PolicyRandom()
+  elif cfg.onnx_file is not None:
+    from src.utils.onnx_policy import OnnxPolicy
+    policy = OnnxPolicy(cfg.onnx_file, env, clip_actions=agent_cfg.clip_actions)
+    print("[INFO] ONNX actor loaded; observations, history and action transforms use mjlab managers")
   else:
     runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
     runner = runner_cls(env, asdict(agent_cfg), device=device)
@@ -170,7 +207,17 @@ def run_play(task_id: str, cfg: PlayConfig):
   if resolved_viewer == "native":
     NativeMujocoViewer(env, policy).run()
   elif resolved_viewer == "viser":
-    ViserPlayViewer(env, policy).run()
+    import viser
+    from src.utils.border_play import BorderPlayViewer
+    server = viser.ViserServer(host=cfg.viewer_host, port=cfg.viewer_port, label="Go2W policy play")
+    viewer_cls = BorderPlayViewer if cfg.inspect_border else ViserPlayViewer
+    viewer = viewer_cls(env, policy, viser_server=server)
+    if cfg.start_paused:
+      viewer.pause()
+    try:
+      viewer.run()
+    finally:
+      server.stop()
   else:
     raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
 

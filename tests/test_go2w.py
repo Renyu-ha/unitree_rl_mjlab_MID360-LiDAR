@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
+import mujoco
 from mjlab.entity import Entity
 from mjlab.sensor import ContactSensorCfg, GridPatternCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
@@ -106,8 +107,8 @@ class Go2WTests(unittest.TestCase):
         with self.subTest(joint=name):
           self.assertAlmostEqual(qpos[self.model.joint(name).qposadr[0]], value)
 
-  def test_reference_collisions_keep_only_named_physics_geoms(self):
-    # Reference FULL_COLLISION has condim=3, priority=0; no friction override.
+  def test_collision_masks_enable_self_contacts_and_disable_visuals(self):
+    # Retain reference condim/priority/friction, with self collision enabled.
     for geom_id in range(self.model.ngeom):
       geom = self.model.geom(geom_id)
       with self.subTest(geom=geom.name):
@@ -115,12 +116,37 @@ class Go2WTests(unittest.TestCase):
           self.assertEqual(int(geom.condim[0]), 3)
           self.assertEqual(int(geom.priority[0]), 0)
           self.assertEqual(int(geom.contype[0]), 1)
-          self.assertEqual(int(geom.conaffinity[0]), 0)
+          self.assertEqual(int(geom.conaffinity[0]), 1)
           if "wheel_link" in geom.name:
             self.assertEqual(geom.friction.tolist(), [0.8, 0.02, 0.01])
         else:
           self.assertEqual(int(geom.contype[0]), 0)
           self.assertEqual(int(geom.conaffinity[0]), 0)
+
+  def test_self_collision_is_clear_in_default_pose_and_active_when_folded(self):
+    model = self.model
+    self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_FILTERPARENT)
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    mujoco.mj_fwdPosition(model, data)
+    self.assertEqual(data.ncon, 0)
+    # A legal folded front-leg pose makes the front-right wheel touch the
+    # rear-right wheel/calf. These are non-adjacent bodies, not hinge neighbors.
+    for leg, values in (("FL", (-.298800904, 2.388383992, -1.448528280)),
+                        ("FR", (.260503085, 1.559224259, -.902612689))):
+      for kind, value in zip(("hip", "thigh", "calf"), values):
+        data.qpos[model.joint(f"{leg}_{kind}_joint").qposadr[0]] = value
+    mujoco.mj_fwdPosition(model, data)
+    pairs = {frozenset((model.geom(int(c.geom1)).name, model.geom(int(c.geom2)).name))
+      for c in data.contact if c.dist < -.001}
+    self.assertIn(frozenset(("FR_wheel_link_collision", "RR_wheel_link_collision")), pairs)
+    affinity = model.geom_conaffinity.copy()
+    try:
+      model.geom_conaffinity[:] = 0
+      mujoco.mj_fwdPosition(model, data)
+      self.assertEqual(data.ncon, 0)
+    finally:
+      model.geom_conaffinity[:] = affinity
 
   def test_registered_tasks_and_compatible_stages(self):
     tasks = [name for name in list_tasks() if name.startswith("Unitree-Go2W-")]
