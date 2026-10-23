@@ -19,6 +19,8 @@ from mjlab.utils.os import dump_yaml, get_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 
+from src.utils.training_viewer import LiveTrainingViewer
+
 
 @dataclass(frozen=True)
 class TrainConfig:
@@ -28,6 +30,11 @@ class TrainConfig:
   video: bool = False
   video_length: int = 200
   video_interval: int = 2000
+  viewer: Literal["none", "viser"] = "none"
+  """Browser display of the training rollout (rank 0 only)."""
+  viewer_host: str = "127.0.0.1"
+  viewer_port: int = 8080
+  viewer_fps: float = 15.0
   enable_nan_guard: bool = False
   torchrunx_log_dir: str | None = None
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
@@ -93,53 +100,57 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
   )
 
-  log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
+  try:
+    log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
-  resume_path: Path | None = None
-  if cfg.agent.resume:
-      # Load checkpoint from local filesystem.
+    resume_path: Path | None = None
+    if cfg.agent.resume:
       resume_path = get_checkpoint_path(
         log_root_path, cfg.agent.load_run, cfg.agent.load_checkpoint
       )
 
-  # Only record videos on rank 0 to avoid multiple workers writing to the same files.
-  if cfg.video and rank == 0:
-    env = VideoRecorder(
-      env,
-      video_folder=Path(log_dir) / "videos" / "train",
-      step_trigger=lambda step: step % cfg.video_interval == 0,
-      video_length=cfg.video_length,
-      disable_logger=True,
+    # Only record/display rank 0; other workers keep their normal rollout path.
+    if cfg.video and rank == 0:
+      env = VideoRecorder(
+        env,
+        video_folder=Path(log_dir) / "videos" / "train",
+        step_trigger=lambda step: step % cfg.video_interval == 0,
+        video_length=cfg.video_length,
+        disable_logger=True,
+      )
+      print("[INFO] Recording videos during training.")
+    if cfg.viewer == "viser" and rank == 0:
+      env = LiveTrainingViewer(
+        env, host=cfg.viewer_host, port=cfg.viewer_port, fps=cfg.viewer_fps,
+      )
+
+    env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)
+
+    agent_cfg = asdict(cfg.agent)
+    env_cfg = asdict(cfg.env)
+
+    runner_cls = load_runner_cls(task_id)
+    if runner_cls is None:
+      runner_cls = MjlabOnPolicyRunner
+
+    runner_kwargs = {}
+    runner = runner_cls(env, agent_cfg, str(log_dir), device, **runner_kwargs)
+
+    runner.add_git_repo_to_log(__file__)
+    if resume_path is not None:
+      print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+      runner.load(str(resume_path))
+
+    # Only write config files from rank 0 to avoid race conditions.
+    if rank == 0:
+      dump_yaml(log_dir / "params" / "env.yaml", env_cfg)
+      dump_yaml(log_dir / "params" / "agent.yaml", agent_cfg)
+
+    runner.learn(
+      num_learning_iterations=cfg.agent.max_iterations, init_at_random_ep_len=True
     )
-    print("[INFO] Recording videos during training.")
-
-  env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)
-
-  agent_cfg = asdict(cfg.agent)
-  env_cfg = asdict(cfg.env)
-
-  runner_cls = load_runner_cls(task_id)
-  if runner_cls is None:
-    runner_cls = MjlabOnPolicyRunner
-
-  runner_kwargs = {}
-  runner = runner_cls(env, agent_cfg, str(log_dir), device, **runner_kwargs)
-
-  runner.add_git_repo_to_log(__file__)
-  if resume_path is not None:
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    runner.load(str(resume_path))
-
-  # Only write config files from rank 0 to avoid race conditions.
-  if rank == 0:
-    dump_yaml(log_dir / "params" / "env.yaml", env_cfg)
-    dump_yaml(log_dir / "params" / "agent.yaml", agent_cfg)
-
-  runner.learn(
-    num_learning_iterations=cfg.agent.max_iterations, init_at_random_ep_len=True
-  )
-
-  env.close()
+  finally:
+    env.close()
 
 
 def launch_training(task_id: str, args: TrainConfig | None = None):

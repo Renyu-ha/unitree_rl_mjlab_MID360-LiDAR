@@ -127,6 +127,30 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 日志：`logs/rsl_rl/go2w_perceptive/<时间>_v2/`，默认本地 TensorBoard，不依赖 W&B 登录。
 
+### 训练时实时可视化
+
+在训练命令中加入 `--viewer=viser`，启动浏览器实时查看实际训练 rollout：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
+  --env.scene.num-envs=4096 \
+  --viewer=viser
+```
+
+本机浏览器打开终端打印的地址，默认 `http://127.0.0.1:8080`。服务器训练时，可在自己电脑执行 `ssh -N -L 8080:127.0.0.1:8080 用户名@服务器地址`，再打开同一地址；也可以显式设置 `--viewer-host=0.0.0.0` 后访问 `http://服务器地址:8080`。端口可用 `--viewer-port=8081` 修改，以终端打印的实际端口为准。
+
+页面可选择训练环境，开启 `Sensors and commands` 显示已启用调试绘制的射线和指令，并切换碰撞几何、接触点/力与相机跟随。接触显示沿用 mjlab 的 CPU MuJoCo 可视化重算，不应当作训练 Warp 接触数据的逐值验证。页面只同步所选环境，默认最多每秒 15 帧，可用 `--viewer-fps=10` 调低；无浏览器连接时跳过后续画面同步。可视化增加一定同步开销，显示的是加速训练过程，PPO 更新阶段画面会暂时停留。
+
+默认 `--viewer=none`。多 GPU 仅 rank 0 创建页面；页面不会额外执行策略、推进仿真或重置训练环境，Go2W 的显式配置保持不变。训练结束或中断时自动关闭查看服务。
+
+若只需定期录像，可使用原有选项，视频保存在本次运行的 `videos/train/` 下：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
+  --env.scene.num-envs=4096 \
+  --video=True --video-interval=2000 --video-length=200
+```
+
 ### 可选：分阶段训练
 
 先学轮腿粗糙地形控制，或者使用 v1 密集感知预训练：
@@ -198,4 +222,5 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 - 历史法向力适配方案及显式配置改造后，19 项回归检查通过；当时新增配置无循环/推导式检查、多接触总力/法向力分离、反向接触坐标轴、逐轮接触时间和每轮单一打包后端传感器检查。六个任务的 18 组对比确认，除接触传感器与空转奖励的传感器引用外，其余配置一致。该自定义接触适配方案现已移除，改用上述普通 `netforce` 传感器。
 - 历史适配方案曾以 4 个环境执行 64 步随机动作，与同场景的原始 `netforce` 传感器对照：逐轮总力、接触数量、腾空/接触时间及首次接触事件一致，实测总力最大误差为 0 N；随后通过最终稀疏阶段的 16 步仿真、1 次 PPO 更新和 ONNX 校验。
 - 简化为普通 `feet_ground_contact` 总力门控后，当前 16 项回归检查全部通过，覆盖严格 `> 1 N` 阈值、任意方向总力及脱离后历史力不生效。最终稀疏阶段以 4 个 CPU 环境完成 16 步仿真、1 次 PPO 更新和 ONNX 校验，Actor/Critic 维度保持 `(4, 726)` / `(4, 269)`。
+- 加入训练实时查看后，19 项回归检查通过。2 个 CPU 环境在最终稀疏阶段完成 16 次画面同步，验证网页 HTTP 响应、训练环境切换、射线/指令及接触显示，关闭后端口释放；正式 `scripts/train.py --viewer=viser` 入口完成 1 次 PPO 更新并正常关闭服务。尚未在目标训练机验证 GPU 或多 GPU 可视化性能。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
