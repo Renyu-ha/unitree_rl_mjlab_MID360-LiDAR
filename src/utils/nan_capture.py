@@ -109,9 +109,9 @@ class PhysicsNanCapture:
     if not bad:
       return False
     env_ids = sorted({env_id for ids in bad.values() for env_id in ids})
+    print(f"[NaNCapture] First invalid result: {stage}; fields/envs: {bad}", flush=True)
     self.dump_path = self._dump(data, env_ids, bad, stage)
     self._dumped = True
-    print(f"[NaNCapture] First invalid result: {stage}; fields/envs: {bad}", flush=True)
     print(f"[NaNCapture] Original failure saved: {self.dump_path}", flush=True)
     raise PhysicsNanError(
       f"NaN/Inf {stage}: {bad}. Rollout stopped before reset. Dump: {self.dump_path}"
@@ -150,42 +150,7 @@ class PhysicsNanCapture:
     phases[failure_key] = stage
     save_fields("failure", result)
 
-    # Contacts are globally packed across worlds. Filter by worldid, never by
-    # assuming that each world owns a contiguous nconmax-sized contact slice.
-    contact = getattr(data, "contact", None)
-    count = _tensor(data, "nacon")
-    if contact is not None and count is not None:
-      n = int(count.flatten()[0].item())
-      world = _tensor(contact, "worldid")[:n]
-      mask = torch.zeros_like(world, dtype=torch.bool)
-      for env_id in selected:
-        mask |= world == env_id
-      payload["failure_contact_worldid"] = world[mask].cpu().numpy().copy()
-      for name in CONTACT_FIELDS:
-        values = _tensor(contact, name)
-        if values is not None:
-          payload[f"failure_contact_{name}"] = values[:n][mask].cpu().numpy().copy()
-      geoms = _tensor(contact, "geom")
-      centers = _tensor(data, "geom_xpos")
-      if geoms is not None and centers is not None:
-        pairs = geoms[:n][mask].long()
-        worlds = world[mask].long()
-        payload["failure_contact_geom_xpos"] = centers[worlds[:, None], pairs].cpu().numpy().copy()
-
-    efc = getattr(data, "efc", None)
-    if efc is not None:
-      save_fields("failure_efc", {
-        name: value for name in ("J", "pos", "D", "aref", "vel", "force", "state")
-        if (value := _tensor(efc, name)) is not None
-      })
-
-    # MJB is the compiled base model; retain the selected worlds' actual DR
-    # arrays as well. Do not mislabel the base MJB as the randomized model.
     model_fields = sorted(self.sim.expanded_fields)
-    for name in model_fields:
-      values = _tensor(self.sim.model, name)
-      indices = selected if values.shape[0] == self.sim.num_envs else [0] * len(selected)
-      payload[f"model_{name}"] = values[indices].cpu().numpy().copy()
     versions = {}
     for package in ("mjlab", "mujoco", "mujoco-warp", "warp-lang", "torch"):
       try:
@@ -203,26 +168,112 @@ class PhysicsNanCapture:
       "timestamp": stamp, "model_file": model_path.name,
       "failure_state_key": failure_key, "failure_stage": stage,
       "nonfinite_fields": bad, "frame_phases": phases,
-      "randomized_model_fields": model_fields,
+      "capture_status": "core_saved", "capture_errors": {},
+      "requested_model_fields": model_fields,
+      "randomized_model_fields": [], "skipped_model_fields": {},
       "note": "states_step_* use mjSTATE_PHYSICS; the final state is the original "
               "invalid result. failure_* are recorded device arrays, not CPU replay. "
               "MJB is the base model; model_* store selected randomized fields. "
               "History counts step/forward calls, not only integration steps. "
               "This is a diagnostic capture, not a complete deterministic checkpoint.",
     }
-    payload["metadata_json"] = np.array(json.dumps(metadata))
-    # Legacy mjlab viewers expect this object. New readers use metadata_json
-    # and do not need allow_pickle=True.
-    payload["_metadata"] = np.array(metadata, dtype=object)
-    mujoco.mj_saveModel(model, str(model_path), None)
-    np.savez_compressed(path, **payload)
-    path.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    def write_archive():
+      payload["metadata_json"] = np.array(json.dumps(metadata))
+      # Retain compatibility with the original mjlab viewer.
+      payload["_metadata"] = np.array(metadata, dtype=object)
+      temporary = path.with_name(f".{path.stem}.partial.npz")
+      np.savez_compressed(temporary, **payload)
+      temporary.replace(path)
+
+    def capture_optional(label, collect):
+      # Diagnostic extraction must never replace the original physics error.
+      # The core archive is already on disk if an optional array is unreadable.
+      try:
+        collect()
+        return True
+      except Exception as error:
+        message = f"{type(error).__name__}: {error}"
+        metadata["capture_errors"][label] = message
+        print(f"[NaNCapture] Could not capture {label}: {message}; core saved at {path}", flush=True)
+        return False
+
+    # Commit essential states and raw failure results before touching model
+    # fields or additional contact/constraint diagnostics. Atomic enrichment
+    # below preserves this first archive if a later write fails.
+    write_archive()
+    capture_optional("model_file", lambda: mujoco.mj_saveModel(model, str(model_path), None))
+
+    def capture_contacts():
+      # Contacts are globally packed; select by worldid rather than nconmax.
+      contact = getattr(data, "contact", None)
+      count = _tensor(data, "nacon")
+      if contact is None or count is None:
+        return
+      n = int(count.flatten()[0].item())
+      if n == 0:
+        payload["failure_contact_worldid"] = np.empty(0, dtype=np.int32)
+        return
+      world = _tensor(contact, "worldid")[:n]
+      mask = torch.zeros_like(world, dtype=torch.bool)
+      for env_id in selected:
+        mask |= world == env_id
+      payload["failure_contact_worldid"] = world[mask].cpu().numpy().copy()
+      for name in CONTACT_FIELDS:
+        values = _tensor(contact, name)
+        if values is not None:
+          payload[f"failure_contact_{name}"] = values[:n][mask].cpu().numpy().copy()
+      geoms = _tensor(contact, "geom")
+      centers = _tensor(data, "geom_xpos")
+      if geoms is not None and centers is not None:
+        pairs = geoms[:n][mask].long()
+        worlds = world[mask].long()
+        payload["failure_contact_geom_xpos"] = centers[worlds[:, None], pairs].cpu().numpy().copy()
+
+    capture_optional("contacts", capture_contacts)
+    efc = getattr(data, "efc", None)
+    if efc is not None:
+      def capture_constraint(name):
+        values = _tensor(efc, name)
+        if values is not None:
+          save_fields("failure_efc", {name: values})
+
+      for name in ("J", "pos", "D", "aref", "vel", "force", "state"):
+        capture_optional(f"efc.{name}", lambda name=name: capture_constraint(name))
+
+    def capture_model_field(name):
+      # COM recomputation registers tendon arrays even when ntendon == 0.
+      # _tensor deliberately returns None for these empty Warp arrays.
+      values = _tensor(self.sim.model, name)
+      if values is None or values.numel() == 0:
+        metadata["skipped_model_fields"][name] = "empty_or_unavailable"
+        return
+      if values.ndim == 0 or values.shape[0] not in (1, self.sim.num_envs):
+        raise ValueError(f"Unexpected per-world model field shape: {tuple(values.shape)}")
+      indices = selected if values.shape[0] == self.sim.num_envs else [0] * len(selected)
+      payload[f"model_{name}"] = values[indices].cpu().numpy().copy()
+      metadata["randomized_model_fields"].append(name)
+
+    for name in model_fields:
+      capture_optional(f"model.{name}", lambda name=name: capture_model_field(name))
+    metadata["capture_status"] = "partial" if metadata["capture_errors"] else "complete"
+    if not capture_optional("archive_enrichment", write_archive):
+      metadata["capture_status"] = "core_saved"
+
+    try:
+      path.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    except OSError as error:
+      print(f"[NaNCapture] Could not write JSON sidecar: {error}; use {path}", flush=True)
     # Replace directory entries atomically. Copying directly to an old latest
     # symlink would follow it and overwrite a historical diagnostic file.
     for source, name in ((model_path, "model_latest.mjb"), (path, "nan_dump_latest.npz")):
-      temporary = self.output_dir / f".{stamp}_{name}"
-      shutil.copyfile(source, temporary)
-      temporary.replace(self.output_dir / name)
+      if not source.exists():
+        continue
+      try:
+        temporary = self.output_dir / f".{stamp}_{name}"
+        shutil.copyfile(source, temporary)
+        temporary.replace(self.output_dir / name)
+      except OSError as error:
+        print(f"[NaNCapture] Could not update {name}: {error}; use {source}", flush=True)
     return path
 
 

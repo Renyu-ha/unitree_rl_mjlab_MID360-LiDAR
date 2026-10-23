@@ -193,6 +193,8 @@ python scripts/viz_nan.py logs/go2w_nan_dump/nan_dump_latest.npz
 
 新版 NPZ 在步前历史之后额外追加故障帧，保留实际 NaN/Inf。`failure_qpos/qvel/qacc/qacc_warmstart/sensordata/ctrl` 等为原始设备结果，`failure_contact_*` 按原始环境编号保存 Warp 接触几何、点、距离、局部坐标系和约束地址，`failure_efc_*` 保留约束雅可比和约束力（有效行数见 `failure_nefc`）。每帧 `inputs_step_*` 保存原始控制、warmstart 和外力；`model_*` 保存选中环境的展开模型字段，MJB 仍是基础模型。旁边的 JSON 记录错误阶段、环境和依赖版本。这些数据用于定位，尚不是完整可确定重现训练的 checkpoint。
 
+采集器先把核心状态和故障结果写入 NPZ，再补充模型、接触及约束信息，以原子替换更新文件。没有肌腱时，质心随机化登记的空 `tendon_length0/tendon_invweight0` 会跳过并列入 `skipped_model_fields`；`randomized_model_fields` 只列实际保存的字段。`capture_status=complete` 表示诊断提取完成，`partial` 表示部分附加信息提取失败（原因见 `capture_errors`），`core_saved` 表示只有第一阶段数据已可靠写出。更新 latest 文件失败时，仍保留带时间戳的原文件，终端会打印具体路径。
+
 关节角已经 NaN 时不存在可绘制的有效姿态，回放会明确提示并显示同一环境最近的有限姿态；不会把 NaN 角度改成零或伪造“炸飞”动画。加速度或传感器先 NaN、关节角尚有限时，画面仍可能正常，应以 `RECORDED FAILURE` 的原始字段为准。旧 NPZ 会标注缺少故障结果。可直接查看记录摘要：
 
 ```bash
