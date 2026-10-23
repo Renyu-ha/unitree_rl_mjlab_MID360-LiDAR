@@ -8,7 +8,6 @@ from src import SRC_PATH
 from mjlab.actuator import BuiltinPositionActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.utils.actuator import ElectricActuator, reflected_inertia
-from mjlab.utils.os import update_assets
 from mjlab.utils.spec_config import CollisionCfg
 
 ##
@@ -21,16 +20,8 @@ A2_XML: Path = (
 assert A2_XML.exists()
 
 
-def get_assets(meshdir: str) -> dict[str, bytes]:
-  assets: dict[str, bytes] = {}
-  update_assets(assets, A2_XML.parent / "assets", meshdir)
-  return assets
-
-
 def get_spec() -> mujoco.MjSpec:
-  spec = mujoco.MjSpec.from_file(str(A2_XML))
-  spec.assets = get_assets(spec.meshdir)
-  return spec
+  return mujoco.MjSpec.from_file(str(A2_XML))
 
 
 ##
@@ -38,6 +29,7 @@ def get_spec() -> mujoco.MjSpec:
 ##
 
 A2_ACTUATOR_HIP = BuiltinPositionActuatorCfg(
+  frictionloss=0.0,
   target_names_expr=(
     ".*hip_.*",
   ),
@@ -47,6 +39,7 @@ A2_ACTUATOR_HIP = BuiltinPositionActuatorCfg(
   armature=0.03,
 )
 A2_ACTUATOR_THIGH = BuiltinPositionActuatorCfg(
+  frictionloss=0.0,
   target_names_expr=(
     ".*thigh_.*",
   ),
@@ -56,6 +49,7 @@ A2_ACTUATOR_THIGH = BuiltinPositionActuatorCfg(
   armature=0.03,
 )
 A2_ACTUATOR_CALF = BuiltinPositionActuatorCfg(
+  frictionloss=0.0,
   target_names_expr=(
     ".*calf_.*",
   ),
@@ -103,8 +97,8 @@ FEET_ONLY_COLLISION = CollisionCfg(
 # Foot collisions are given custom condim, friction and solimp.
 FULL_COLLISION = CollisionCfg(
   geom_names_expr=(".*_collision",),
-  condim={_foot_regex: 3, ".*_collision": 1},
-  priority={_foot_regex: 1},
+  condim={_foot_regex: 3, ".*": 1},
+  priority={_foot_regex: 1, ".*": 0},
   friction={_foot_regex: (0.6,)},
   solimp={_foot_regex: (0.9, 0.95, 0.023)},
   contype=1,

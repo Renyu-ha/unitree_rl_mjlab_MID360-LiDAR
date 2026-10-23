@@ -21,6 +21,8 @@
 
 支持机器人：**Go2、Go2W（轮腿训练）、A2、As2、G1（29DOF）、G1-23DOF、H1\_2、H2、R1**
 
+本分支适配截至 2026-10-23 的 mjlab 主线 `8bb2bc9e`，固定 MuJoCo / mujoco-warp **3.17.0**、Warp **1.18.0**。使用 `uv sync --locked` 安装；上游仍声明 3.16 依赖，本项目通过明确的 uv override 测试 3.17，不能使用旧版的 `pip install -e .` 安装流程。安装及 GPU 回归命令见 [安装说明](doc/setup_zh.md)。
+
 ### Go2W 感知训练迁移
 
 Go2W 使用 12 个腿关节位置动作和 4 个轮子速度动作，支持粗糙地形、MID360 感知 v1/v2、上台阶精调和固定 14 cm 台阶回放。仓库感知运控解析、迁移细节及完整命令见 [Go2W 迁移说明](doc/go2w_perceptive_zh.md)。
@@ -38,8 +40,8 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 --env.scene.num-envs=40
 ### 环境要求
 
 - Ubuntu 22.04
-- NVIDIA GPU（驱动 ≥ 550）
-- Python 3.11（推荐使用 Conda）
+- NVIDIA GPU（驱动需支持所选 PyTorch CUDA 包及 Warp 1.18）
+- Python 3.11（推荐）
 
 详细安装步骤请参考 [doc/setup_zh.md](doc/setup_zh.md)。
 
@@ -47,15 +49,13 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 --env.scene.num-envs=40
 
 ```bash
 # 克隆仓库（含 submodule）
-git clone --recurse-submodules https://github.com/1YI-DING/unitree_rl_mjlab_MID360-LiDAR.git
+git clone --recurse-submodules -b feat/mjlab-latest-mujoco-warp-3-17 https://github.com/Renyu-ha/unitree_rl_mjlab_MID360-LiDAR.git
 cd unitree_rl_mjlab_MID360-LiDAR
 
-# 创建并激活环境
-conda create -n unitree_rl_mjlab python=3.11
-conda activate unitree_rl_mjlab
-
-# 安装依赖
-pip install -e .
+# 创建独立 .venv 并安装锁定依赖；保留原来的训练环境
+python -m pip install 'uv>=0.13.5'
+uv sync --locked --python 3.11 --extra cu126
+source .venv/bin/activate
 ```
 
 ---

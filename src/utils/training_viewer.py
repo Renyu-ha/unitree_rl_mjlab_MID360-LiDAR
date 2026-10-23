@@ -27,7 +27,7 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
     fps: float = 15.0,
   ):
     import viser
-    from mjlab.viewer.viser.scene import ViserMujocoScene
+    from mjlab.viewer.viser.scene import MjlabViserScene
 
     if not math.isfinite(fps) or fps <= 0:
       raise ValueError("viewer_fps must be finite and positive")
@@ -42,7 +42,7 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
     self._server = viser.ViserServer(host=host, port=port, label="Training")
     try:
       # A single display instance avoids copying/rendering thousands of worlds.
-      self._scene = ViserMujocoScene.create(
+      self._scene = MjlabViserScene(
         self._server, env.unwrapped.sim.mj_model, num_envs=1,
       )
       self._server.gui.add_markdown(
@@ -55,13 +55,14 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
       self._debug_checkbox = self._server.gui.add_checkbox(
         "Sensors and commands", initial_value=False,
       )
-      self._scene.create_visualization_gui(
+      self._scene.create_scene_gui(
         camera_distance=env.cfg.viewer.distance,
         camera_azimuth=env.cfg.viewer.azimuth,
         camera_elevation=env.cfg.viewer.elevation,
         show_debug_viz_control=False,
       )
-      self._scene.create_groups_gui(self._server.gui.add_tab_group())
+      with self._server.gui.add_tab_group().add_tab("Groups"):
+        self._scene.create_groups_gui()
     except BaseException:
       self._server.stop()
       raise
@@ -107,6 +108,7 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
     selected = SimpleNamespace(
       xpos=data.xpos[index:index + 1], xmat=data.xmat[index:index + 1],
       qpos=data.qpos[index:index + 1], qvel=data.qvel[index:index + 1],
+      ctrl=data.ctrl[index:index + 1],
     )
     if self.unwrapped.sim.mj_model.nmocap > 0:
       selected.mocap_pos = data.mocap_pos[index:index + 1]

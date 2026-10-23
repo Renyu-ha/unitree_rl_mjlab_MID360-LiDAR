@@ -16,5 +16,6 @@ __pycache__/
 *.pyc
 *.pyo
 .validation/
+.venv/
 .codex
 **/params/*.npz

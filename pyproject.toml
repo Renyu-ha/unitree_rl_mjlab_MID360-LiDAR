@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unitree-rl-mjlab"
+version = "0.0.2"
+description = "Unitree Go2W and G1 MID360 perceptive locomotion tasks"
+license = "Apache-2.0"
+license-files = ["LICENCE"]
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "mjlab",
+  "mujoco==3.17.0",
+  "mujoco-warp==3.17.0",
+  "warp-lang==1.18.0",
+  "scipy>=1.15",
+]
+
+[project.optional-dependencies]
+cpu = ["torch>=2.14.0"]
+cu126 = ["torch>=2.14.0"]
+cu130 = ["torch>=2.14.0"]
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*"]
+
+[tool.setuptools.package-data]
+src = ["assets/robots/**/*.xml", "assets/robots/**/*.STL", "assets/robots/**/*.stl", "assets/robots/**/*.obj", "assets/robots/**/LICENSE", "assets/robots/**/LICENCE", "assets/robots/**/SOURCE.md"]
+
+[tool.uv]
+# Upstream main still declares ~=3.16.0. This branch explicitly tests 3.17.0.
+# Plain pip does not apply uv's dependency overrides; use uv sync.
+override-dependencies = ["mujoco==3.17.0", "mujoco-warp==3.17.0"]
+conflicts = [[{extra = "cpu"}, {extra = "cu126"}, {extra = "cu130"}]]
+
+[tool.uv.sources]
+mjlab = { git = "https://github.com/mujocolab/mjlab.git", rev = "8bb2bc9e187797689ec82c78c35019afd2fd0376" }
+warp-lang = { index = "nvidia", marker = "sys_platform != 'darwin'" }
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu126", extra = "cu126" },
+  { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

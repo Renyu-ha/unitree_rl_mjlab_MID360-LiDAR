@@ -16,6 +16,7 @@ class TrainingViewerTests(unittest.TestCase):
     data = SimpleNamespace(
       xpos=torch.arange(36).reshape(4, 3, 3), xmat=torch.zeros(4, 3, 3, 3),
       qpos=torch.zeros(4, 7), qvel=torch.zeros(4, 6),
+      ctrl=torch.zeros(4, 16),
     )
     env = Mock()
     env.unwrapped = env

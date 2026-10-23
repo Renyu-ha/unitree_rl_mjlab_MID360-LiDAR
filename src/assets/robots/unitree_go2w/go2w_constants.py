@@ -10,7 +10,6 @@ import mujoco
 
 from mjlab.actuator import BuiltinPositionActuatorCfg, BuiltinVelocityActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.utils.os import update_assets
 from mjlab.utils.spec_config import CollisionCfg
 
 GO2W_XML = Path(__file__).parent / "xmls" / "go2w.xml"
@@ -29,12 +28,7 @@ WHEEL_ACTION_SCALE = 20.0  # radians/second
 
 
 def get_spec() -> mujoco.MjSpec:
-  spec = mujoco.MjSpec.from_file(str(GO2W_XML))
-  # Embed the XML's local mesh files before attaching the robot to the scene.
-  assets = {}
-  update_assets(assets, GO2W_XML.parent / "assets", "assets")
-  spec.assets = assets
-  return spec
+  return mujoco.MjSpec.from_file(str(GO2W_XML))
 
 
 def get_go2w_robot_cfg() -> EntityCfg:
@@ -63,18 +57,22 @@ def get_go2w_robot_cfg() -> EntityCfg:
     articulation=EntityArticulationInfoCfg(
       actuators=(
         BuiltinPositionActuatorCfg(
+          frictionloss=0.0,
           target_names_expr=(".*_hip_joint",),
           stiffness=20.0, damping=1.0, effort_limit=23.5, armature=0.01,
         ),
         BuiltinPositionActuatorCfg(
+          frictionloss=0.0,
           target_names_expr=(".*_thigh_joint",),
           stiffness=20.0, damping=1.0, effort_limit=23.5, armature=0.01,
         ),
         BuiltinPositionActuatorCfg(
+          frictionloss=0.0,
           target_names_expr=(".*_calf_joint",),
           stiffness=40.0, damping=2.0, effort_limit=45.0, armature=0.02,
         ),
         BuiltinVelocityActuatorCfg(
+          frictionloss=0.0,
           target_names_expr=WHEEL_JOINTS,
           damping=2.0, effort_limit=45.0, armature=0.0,
         ),

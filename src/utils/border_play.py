@@ -15,7 +15,7 @@ from src.utils.border_inspection import find_terrain_border
 
 
 class PlayVelocityCommand(UniformVelocityCommand):
-  def create_gui(self, name, server, get_env_idx):
+  def create_gui(self, name, server, get_env_idx, on_change=None, request_action=None):
     """Keep zero-range axes fixed; Viser rejects the upstream zero-max slider."""
     self._joystick_sliders = []
     self._joystick_get_env_idx = get_env_idx
@@ -27,6 +27,8 @@ class PlayVelocityCommand(UniformVelocityCommand):
         slider = server.gui.add_slider(axis, min=-max(bound, 0.05), max=max(bound, 0.05),
           step=0.01, initial_value=0.0, disabled=bound == 0)
         self._joystick_sliders.append(slider)
+        if on_change is not None:
+          slider.on_update(lambda _: on_change())
       zero = server.gui.add_button("Zero")
 
       @zero.on_click
