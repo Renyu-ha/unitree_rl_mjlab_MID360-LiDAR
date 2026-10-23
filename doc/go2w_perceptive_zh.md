@@ -127,6 +127,76 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 日志：`logs/rsl_rl/go2w_perceptive/<时间>_v2/`，默认本地 TensorBoard，不依赖 W&B 登录。
 
+### NaN 定位与 W&B 日志
+
+RSL-RL 的 `The observation group 'critic' ... contains NaN` 只指出组名，不能据此确定出错项，也不能仅从前一轮的平均奖励定位原因。mjlab 1.2.0 已支持逐项观测检查：Actor、Critic 分别设置 `nan_policy=error`、`nan_check_per_term=True`。这会在观测进入延迟/历史缓冲之前检查 NaN 和 Inf，并给出类似以下信息（这是人为注入 NaN 后验证的示例，不代表实际故障来源）：
+
+```text
+NaN/Inf detected in observation 'critic/foot_contact_forces' for environments: [1]
+```
+
+物理 NaN guard 则检查 `qpos`、`qvel`、`qacc`、`qacc_warmstart` 和 `sensordata`，保存发散前的状态序列与模型。两种检查配合使用；不应通过 `sanitize` 或 `nan_to_num` 掩盖尚未定位的错误。
+
+上传 W&B 前，在训练机环境中安装兼容依赖并登录。当前 RSL-RL 5.0.1 的 W&B 接口传入 `start_method`，该参数从 [W&B 0.29.0](https://github.com/wandb/wandb/releases/tag/v0.29.0) 起被删除；本仓库约束 `wandb>=0.22.3,<0.29`，本地使用 0.28.2 验证。更新仓库后执行：
+
+```bash
+pip install -e .
+wandb login
+export WANDB_USERNAME='你的W&B用户名或团队名'
+export WANDB_MODE=online
+mkdir -p logs
+```
+
+`WANDB_USERNAME` 是当前 RSL-RL 接口读取的 W&B entity，并非 GitHub 用户名；不指定时使用登录账号默认设置。[W&B 官方快速开始](https://github.com/wandb/wandb#quickstart) 说明了登录和查看运行记录的方法。
+
+下面同时开启具体观测项定位、物理状态保存与 W&B 曲线/checkpoint 记录。环境数、seed 和恢复来源应与待排查的训练保持一致；示例沿用 4096 个环境：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
+  --env.scene.num-envs=4096 \
+  --enable-nan-guard=True \
+  --env.sim.nan-guard.output-dir=logs/go2w_nan_dump \
+  --env.observations.actor.nan-policy=error \
+  --env.observations.actor.nan-check-per-term=True \
+  --env.observations.critic.nan-policy=error \
+  --env.observations.critic.nan-check-per-term=True \
+  --agent.logger=wandb \
+  --agent.wandb-project=go2w_mid360 \
+  --agent.upload-model=True \
+  --agent.run-name=v2_nan_debug \
+  2>&1 | tee logs/go2w_nan_debug.log
+```
+
+多 GPU 排查应为各进程分别指定 dump 目录，避免同时写入同名文件；上面的命令默认单 GPU。逐项检查与状态捕获会增加同步和存储开销，正常训练时可移除诊断参数。W&B 会记录训练指标、配置和 `.pt` checkpoint；物理 `.npz` / `.mjb` 转储仍保存在本地，不自动上传。只想上传指标时使用 `--agent.upload-model=False`。
+
+| 首个报错项 | 优先检查 |
+| --- | --- |
+| `critic/foot_contact_forces` | `feet_ground_contact.data.force` 原始逐轮总力、接触传感器与求解器输出 |
+| `joint_pos`、`joint_vel`、`projected_gravity`、`base_ang_vel`、`base_lin_vel` | 对应环境的物理状态和 IMU 数据，判断状态是否已发散 |
+| `height_scan` | 射线命中、地形高度、机体位姿与高度图计算 |
+| `foot_air_time`、`foot_contact` | 接触状态和时间跟踪 |
+| `actions` | 策略输出、网络参数及上一次 PPO 更新 |
+
+这张表是检查入口，首个报错项也可能是上游错误的结果，不能只凭项名判定根因。保存终端中第一条 NaN/Inf 报错、环境编号和此前的 MuJoCo/Warp warning；若 guard 产生了转储，保留同一时间的 `.npz` 与 `.mjb`。可用以下命令在浏览器回看发散前的状态：
+
+```bash
+python -m mjlab.scripts.nan_viz logs/go2w_nan_dump/nan_dump_latest.npz
+```
+
+该回放帮助检查异常姿态，不包含完整训练随机状态、动作序列和每个 GPU 环境的随机化参数。若要对比 Newton/CG，先保留原设置抓一次，再用 `--env.sim.mujoco.solver=cg` 单独做对照，不能将换求解器后暂未报错当作根因已确认。
+
+训练机暂时无法联网时，将 `WANDB_MODE=offline`，其余 W&B 参数保留；联网后运行 `wandb sync wandb/offline-run-<本次运行目录>`。W&B 离线目录与 `logs/rsl_rl/...` 目录是两种不同的数据，不应把普通 TensorBoard 目录直接当作 W&B 离线运行目录同步。
+
+对于已经完成或崩溃的纯 TensorBoard 运行，兼容范围内的 W&B 0.28.2 仍支持以下旧版导入选项（SDK 会打印弃用提示）；将路径替换为含 `events.out.tfevents.*` 的实际运行目录：
+
+```bash
+wandb sync --sync-tensorboard \
+  --project go2w_mid360 --entity "$WANDB_USERNAME" \
+  'logs/rsl_rl/go2w_perceptive/你的旧运行目录'
+```
+
+此方式导入旧事件数据，不会自动附带 `.pt` checkpoint 或 NaN 转储。后续新训练直接使用 `--agent.logger=wandb`。
+
 ### 训练时实时可视化
 
 在训练命令中加入 `--viewer=viser`，启动浏览器实时查看实际训练 rollout：
@@ -223,4 +293,5 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 - 历史适配方案曾以 4 个环境执行 64 步随机动作，与同场景的原始 `netforce` 传感器对照：逐轮总力、接触数量、腾空/接触时间及首次接触事件一致，实测总力最大误差为 0 N；随后通过最终稀疏阶段的 16 步仿真、1 次 PPO 更新和 ONNX 校验。
 - 简化为普通 `feet_ground_contact` 总力门控后，当前 16 项回归检查全部通过，覆盖严格 `> 1 N` 阈值、任意方向总力及脱离后历史力不生效。最终稀疏阶段以 4 个 CPU 环境完成 16 步仿真、1 次 PPO 更新和 ONNX 校验，Actor/Critic 维度保持 `(4, 726)` / `(4, 269)`。
 - 加入训练实时查看后，19 项回归检查通过。2 个 CPU 环境在最终稀疏阶段完成 16 次画面同步，验证网页 HTTP 响应、训练环境切换、射线/指令及接触显示，关闭后端口释放；正式 `scripts/train.py --viewer=viser` 入口完成 1 次 PPO 更新并正常关闭服务。尚未在目标训练机验证 GPU 或多 GPU 可视化性能。
+- 验证严格 NaN 定位时，向环境 1 的接触力观测人为注入 NaN，实际报错准确包含 `critic/foot_contact_forces` 与 `[1]`；物理 `qpos/qvel` 仍有限。兼容 W&B 0.28.2 后，2 个 CPU 环境在开启物理 guard 和 Actor/Critic 逐项检查时完成 1 次 PPO 更新，W&B 离线运行写入指标、配置和 `.pt` checkpoint；19 项检查及依赖一致性检查通过。没有使用账号做云端上传测试，这些验证也不代表训练机第 234 轮 NaN 的根因已确认。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
