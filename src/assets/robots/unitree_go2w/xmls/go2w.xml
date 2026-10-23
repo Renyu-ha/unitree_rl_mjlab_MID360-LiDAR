@@ -108,7 +108,7 @@
               <geom type="mesh" rgba="0.15 0.15 0.15 1" mesh="wheel" pos="0 0.0 0"
                 quat="0.0 1.0 0.0 0.0" contype="0" conaffinity="0" group="2" />
               <!-- Cylinder local Z is aligned with the wheel joint's Y axis. -->
-              <geom name="FL_wheel_link_collision" type="cylinder" size="0.086 0.025907457"
+              <geom name="FL_wheel_link_collision" type="cylinder" size="0.086 0.0225"
                 pos="0 0.050764256 0" quat="0.7071067811865476 -0.7071067811865476 0 0" class="foot" />
               <site name="FL" pos="0 0.05 0" size="0.01 0.005 0.005" group="5" />
             </body>
@@ -151,7 +151,7 @@
                 diaginertia="0.003 0.0016 0.0016" />
               <joint name="FR_wheel_joint" pos="0 0 0" axis="0 1 0" />
               <geom type="mesh" rgba="0.15 0.15 0.15 1" mesh="wheel" pos="0 -0.0 0" contype="0" conaffinity="0" group="2" />
-              <geom name="FR_wheel_link_collision" type="cylinder" size="0.086 0.025907457"
+              <geom name="FR_wheel_link_collision" type="cylinder" size="0.086 0.0225"
                 pos="0 -0.050764256 0" quat="0.7071067811865476 -0.7071067811865476 0 0" class="foot" />
               <site name="FR" pos="0 -0.05 0" size="0.01 0.005 0.005" group="5" />
             </body>
@@ -195,7 +195,7 @@
               <joint name="RL_wheel_joint" pos="0 0 0" axis="0 1 0" />
               <geom type="mesh" rgba="0.15 0.15 0.15 1" mesh="wheel" pos="0 0.0 0"
                 quat="0.0 1.0 0.0 0.0" contype="0" conaffinity="0" group="2" />
-              <geom name="RL_wheel_link_collision" type="cylinder" size="0.086 0.025907457"
+              <geom name="RL_wheel_link_collision" type="cylinder" size="0.086 0.0225"
                 pos="0 0.050764256 0" quat="0.7071067811865476 -0.7071067811865476 0 0" class="foot" />
               <site name="RL" pos="0 0.05 0" size="0.01 0.005 0.005" group="5" />
             </body>
@@ -240,7 +240,7 @@
                 diaginertia="0.003 0.0016 0.0016" />
               <joint name="RR_wheel_joint" pos="0 0 0" axis="0 1 0" />
               <geom type="mesh" rgba="0.15 0.15 0.15 1" mesh="wheel" pos="0 -0.00 0" contype="0" conaffinity="0" group="2" />
-              <geom name="RR_wheel_link_collision" type="cylinder" size="0.086 0.025907457"
+              <geom name="RR_wheel_link_collision" type="cylinder" size="0.086 0.0225"
                 pos="0 -0.050764256 0" quat="0.7071067811865476 -0.7071067811865476 0 0" class="foot" />
               <site name="RR" pos="0 -0.05 0" size="0.01 0.005 0.005" group="5" />
             </body>

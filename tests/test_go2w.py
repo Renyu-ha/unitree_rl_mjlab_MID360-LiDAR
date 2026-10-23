@@ -182,7 +182,7 @@ class Go2WTests(unittest.TestCase):
           self.assertEqual(int(geom.contype[0]), 0)
           self.assertEqual(int(geom.conaffinity[0]), 0)
 
-  def test_wheel_cylinders_match_visual_mesh_size_and_axle(self):
+  def test_wheel_cylinders_have_45mm_width_and_preserve_radius_center_axle(self):
     model = self.model
     for leg in ("FL", "FR", "RL", "RR"):
       with self.subTest(leg=leg):
@@ -203,7 +203,8 @@ class Go2WTests(unittest.TestCase):
         np.testing.assert_allclose(collision.pos, (lower + upper) / 2, atol=1e-8)
         self.assertAlmostEqual(collision.size[0], WHEEL_RADIUS)
         self.assertAlmostEqual(collision.size[0], np.linalg.norm(vertices[:, [0, 2]], axis=1).max())
-        self.assertAlmostEqual(collision.size[1], (upper[1] - lower[1]) / 2)
+        self.assertAlmostEqual(2 * collision.size[1], 0.045)
+        self.assertLess(collision.size[1], (upper[1] - lower[1]) / 2)
         mujoco.mju_quat2Mat(rotation.ravel(), collision.quat)
         np.testing.assert_allclose(rotation[:, 2], model.joint(f"{leg}_wheel_joint").axis, atol=1e-12)
         self.assertAlmostEqual(model.body_mass[body_id], 0.98)
