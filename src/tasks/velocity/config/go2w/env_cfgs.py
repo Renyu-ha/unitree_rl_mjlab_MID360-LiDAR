@@ -309,29 +309,6 @@ def _make_go2w_env_cfg(
 
   twist = cfg.commands["twist"]
   twist.rel_standing_envs = 0.03 if v2 else 0.05
-  if perceptive and not play:
-    cfg.curriculum["command_vel"].params["velocity_stages"] = [
-      {"step": 0, "lin_vel_x": (0.0, 0.5), "lin_vel_y": (-0.15, 0.15), "ang_vel_z": (-0.25, 0.25)},
-      {"step": 5000 * 24, "lin_vel_x": (0.0, 0.8), "lin_vel_y": (-0.2, 0.2), "ang_vel_z": (-0.35, 0.35)},
-      {"step": 10000 * 24, "lin_vel_x": (-0.1, 1.0), "lin_vel_y": (-0.3, 0.3), "ang_vel_z": (-0.5, 0.5)},
-      {"step": 20000 * 24, "lin_vel_x": (-0.2, 1.2), "lin_vel_y": (-0.4, 0.4), "ang_vel_z": (-0.7, 0.7)},
-    ]
-  if v2 and not play:
-    cfg.curriculum["command_vel"].params["velocity_stages"] = [
-      {"step": 0, "lin_vel_x": (0.15, 0.45), "lin_vel_y": (-0.05, 0.05), "ang_vel_z": (-0.10, 0.10)},
-      {"step": 4000 * 24, "lin_vel_x": (0.15, 0.65), "lin_vel_y": (-0.08, 0.08), "ang_vel_z": (-0.18, 0.18)},
-      {"step": 9000 * 24, "lin_vel_x": (0.10, 0.90), "lin_vel_y": (-0.12, 0.12), "ang_vel_z": (-0.30, 0.30)},
-      {"step": 16000 * 24, "lin_vel_x": (0.05, 1.10), "lin_vel_y": (-0.18, 0.18), "ang_vel_z": (-0.45, 0.45)},
-    ]
-    cfg.curriculum["track_linear_velocity_weight"] = CurriculumTermCfg(
-      func=mdp.reward_weight,
-      params={"reward_name": "track_linear_velocity", "weight_stages": [
-        {"step": 0, "weight": 1.5}, {"step": 7000 * 24, "weight": 1.35},
-        {"step": 14000 * 24, "weight": 1.2},
-      ]},
-    )
-    # Foot-lifting curricula are inapplicable to rolling; pose stays at the
-    # user's fixed 0.5 rather than being overwritten by G1's pose curriculum.
   cfg.viewer.body_name = "base_link"
   cfg.viewer.distance = 2.0
   cfg.viewer.elevation = -10.0
@@ -351,6 +328,10 @@ def _make_go2w_env_cfg(
 
   if perceptive:
     _configure_perception(cfg, play=play, version=1 if stage == "v1" else 2)
+  if stage == "v1":
+    _configure_perceptive_v1_curriculum(cfg)
+  elif v2:
+    _configure_perceptive_v2_curriculum(cfg, play=play)
   if stepup:
     _configure_stepup(cfg, play=play)
   if stage == "step14":
@@ -400,6 +381,86 @@ def _configure_perception(cfg: ManagerBasedRlEnvCfg, *, play: bool, version: int
   scan.delay_update_period = 0 if play else 3
 
 
+def _configure_perceptive_v1_curriculum(cfg: ManagerBasedRlEnvCfg) -> None:
+  """Keep the V1 command schedule separate from the V2 configuration."""
+  if "command_vel" in cfg.curriculum:
+    cfg.curriculum["command_vel"].params["velocity_stages"] = [
+      {
+        "step": 0,
+        "lin_vel_x": (0.0, 0.5),
+        "lin_vel_y": (-0.15, 0.15),
+        "ang_vel_z": (-0.25, 0.25),
+      },
+      {
+        "step": 5000 * 24,
+        "lin_vel_x": (0.0, 0.8),
+        "lin_vel_y": (-0.2, 0.2),
+        "ang_vel_z": (-0.35, 0.35),
+      },
+      {
+        "step": 10000 * 24,
+        "lin_vel_x": (-0.1, 1.0),
+        "lin_vel_y": (-0.3, 0.3),
+        "ang_vel_z": (-0.5, 0.5),
+      },
+      {
+        "step": 20000 * 24,
+        "lin_vel_x": (-0.2, 1.2),
+        "lin_vel_y": (-0.4, 0.4),
+        "ang_vel_z": (-0.7, 0.7),
+      },
+    ]
+
+
+def _configure_perceptive_v2_curriculum(cfg: ManagerBasedRlEnvCfg, *, play: bool) -> None:
+  """Match this repository's unitree_g1_perceptive_rough_v2_env_cfg.
+
+  terrain_levels is inherited from make_velocity_env_cfg, as it is for G1.
+  Foot-clearance/swing curricula are excluded for rolling; pose_weight is
+  excluded because the user's pose reward stays fixed at 0.5.
+  """
+  if "command_vel" in cfg.curriculum:
+    cfg.curriculum["command_vel"].params["velocity_stages"] = [
+      {
+        "step": 0,
+        "lin_vel_x": (0.15, 0.45),
+        "lin_vel_y": (-0.05, 0.05),
+        "ang_vel_z": (-0.10, 0.10),
+      },
+      {
+        "step": 4000 * 24,
+        "lin_vel_x": (0.15, 0.65),
+        "lin_vel_y": (-0.08, 0.08),
+        "ang_vel_z": (-0.18, 0.18),
+      },
+      {
+        "step": 9000 * 24,
+        "lin_vel_x": (0.10, 0.90),
+        "lin_vel_y": (-0.12, 0.12),
+        "ang_vel_z": (-0.30, 0.30),
+      },
+      {
+        "step": 16000 * 24,
+        "lin_vel_x": (0.05, 1.10),
+        "lin_vel_y": (-0.18, 0.18),
+        "ang_vel_z": (-0.45, 0.45),
+      },
+    ]
+
+  if not play:
+    cfg.curriculum["track_linear_velocity_weight"] = CurriculumTermCfg(
+      func=mdp.reward_weight,
+      params={
+        "reward_name": "track_linear_velocity",
+        "weight_stages": [
+          {"step": 0, "weight": 1.5},
+          {"step": 7000 * 24, "weight": 1.35},
+          {"step": 14000 * 24, "weight": 1.2},
+        ],
+      },
+    )
+
+
 def _configure_stepup(cfg: ManagerBasedRlEnvCfg, *, play: bool) -> None:
   cfg.rewards["track_linear_velocity"].weight = 2.0
   cfg.rewards["track_angular_velocity"].weight = 1.15
@@ -418,12 +479,22 @@ def _configure_stepup(cfg: ManagerBasedRlEnvCfg, *, play: bool) -> None:
     params={"command_name": "twist", "command_x_threshold": 0.1,
       "command_y_threshold": 0.08, "command_yaw_threshold": 0.04},
   )
-  if not play:
+  if "command_vel" in cfg.curriculum:
     cfg.curriculum["command_vel"].params["velocity_stages"] = [
-      {"step": 0, "lin_vel_x": (0.25, 0.50), "lin_vel_y": (-0.04, 0.04), "ang_vel_z": (0.0, 0.0)},
-      {"step": 4000 * 24, "lin_vel_x": (0.30, 0.60), "lin_vel_y": (-0.06, 0.06), "ang_vel_z": (0.0, 0.0)},
+      {
+        "step": 0,
+        "lin_vel_x": (0.25, 0.50),
+        "lin_vel_y": (-0.04, 0.04),
+        "ang_vel_z": (0.0, 0.0),
+      },
+      {
+        "step": 4000 * 24,
+        "lin_vel_x": (0.30, 0.60),
+        "lin_vel_y": (-0.06, 0.06),
+        "ang_vel_z": (0.0, 0.0),
+      },
     ]
-  else:
+  if play:
     cfg.commands["twist"].ranges.lin_vel_x = (0.35, 0.45)
     cfg.commands["twist"].ranges.lin_vel_y = (-0.10, 0.10)
     cfg.commands["twist"].ranges.ang_vel_z = (-0.10, 0.10)
@@ -446,7 +517,6 @@ def _configure_step14(cfg: ManagerBasedRlEnvCfg) -> None:
   generator.border_width = 10.0
   generator.curriculum = False
   cfg.scene.terrain.max_init_terrain_level = 0
-  cfg.curriculum.pop("terrain_levels", None)
 
 
 def unitree_go2w_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:

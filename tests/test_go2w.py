@@ -393,12 +393,45 @@ class Go2WTests(unittest.TestCase):
           self.assertEqual(actual.rewards["track_angular_velocity"].params["std"], 0.5)
           self.assertEqual(actual.rewards["track_angular_velocity"].weight, expected.rewards["track_angular_velocity"].weight)
           self.assertNotIn("illegal_contact", actual.terminations)
-          for curriculum in ("command_vel", "track_linear_velocity_weight"):
-            if curriculum in expected.curriculum:
-              self.assertEqual(asdict(actual.curriculum[curriculum]), asdict(expected.curriculum[curriculum]))
+          omitted = {"pose_weight", "foot_clearance_weight", "foot_swing_height_weight"}
+          self.assertEqual(set(actual.curriculum), set(expected.curriculum) - omitted)
+          for curriculum in actual.curriculum:
+            self.assertEqual(asdict(actual.curriculum[curriculum]), asdict(expected.curriculum[curriculum]))
           self.assertNotIn("pose_weight", actual.curriculum)
           self.assertNotIn("foot_clearance_weight", actual.curriculum)
           self.assertNotIn("foot_swing_height_weight", actual.curriculum)
+
+  def test_v2_curriculum_is_configured_without_applying_v1_schedule(self):
+    with patch.object(go2w_env_cfgs, "_configure_perceptive_v1_curriculum", side_effect=AssertionError("V2 must not apply V1 curriculum")):
+      cfg = go2w_env_cfgs.unitree_go2w_perceptive_rough_v2_env_cfg()
+    self.assertEqual(set(cfg.curriculum), {"terrain_levels", "command_vel", "track_linear_velocity_weight"})
+
+  def test_v2_curriculum_runtime_matches_repository_g1_v2_at_stage_boundaries(self):
+    steps = (0, 1, 4000 * 24, 4000 * 24 + 1, 7000 * 24, 7000 * 24 + 1,
+      9000 * 24, 9000 * 24 + 1, 14000 * 24, 14000 * 24 + 1,
+      16000 * 24, 16000 * 24 + 1)
+    traces = []
+    for task in ("Unitree-Go2W-Perceptive-Rough-v2", "Unitree-G1-Perceptive-Rough-v2"):
+      cfg = load_env_cfg(task)
+      command = SimpleNamespace(cfg=cfg.commands["twist"])
+      env = SimpleNamespace(
+        common_step_counter=0,
+        command_manager=SimpleNamespace(get_term=lambda name: command),
+        reward_manager=SimpleNamespace(get_term_cfg=lambda name: cfg.rewards[name]),
+      )
+      trace = {}
+      for step in steps:
+        env.common_step_counter = step
+        for name in ("command_vel", "track_linear_velocity_weight"):
+          term = cfg.curriculum[name]
+          term.func(env, torch.tensor([0]), **term.params)
+        trace[step] = (asdict(command.cfg.ranges), cfg.rewards["track_linear_velocity"].weight)
+      traces.append(trace)
+    self.assertEqual(traces[0], traces[1])
+    self.assertEqual(traces[0][4000 * 24][0]["lin_vel_x"], (0.15, 0.45))
+    self.assertEqual(traces[0][4000 * 24 + 1][0]["lin_vel_x"], (0.15, 0.65))
+    self.assertEqual(traces[0][7000 * 24][1], 1.5)
+    self.assertEqual(traces[0][7000 * 24 + 1][1], 1.35)
 
   def _rolling_env(self, speed=1.0, spin=None, contact=True, num_wheels=4):
     spin = speed / WHEEL_RADIUS if spin is None else spin
