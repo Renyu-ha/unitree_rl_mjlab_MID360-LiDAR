@@ -1,49 +1,94 @@
-"""Boundary diagnostics must use the whole grid and preserve default tasks."""
+"""Map boundaries truncate episodes without applying failure penalties."""
 
 import unittest
 from types import SimpleNamespace
 
 import mujoco
 import torch
-from mjlab.tasks.registry import load_env_cfg
+from mjlab.managers.reward_manager import RewardManager
+from mjlab.managers.termination_manager import TerminationManager
+from mjlab.tasks.registry import list_tasks, load_env_cfg
 from mjlab.terrains.utils import make_border
 
 import src.tasks  # noqa: F401
+from src.tasks.velocity.mdp.terminations import terrain_out_of_bounds
 from src.utils.border_inspection import find_terrain_border
-from src.utils.terrain_boundary import configure_terrain_boundary, terrain_grid_boundary
 
 
 class TerrainBoundaryTests(unittest.TestCase):
-  def test_boundary_uses_global_grid_not_spawn_tile(self):
-    generator = SimpleNamespace(num_rows=10, num_cols=6, size=(8.0, 8.0))
-    positions = torch.tensor([
-      [-36.0, -20.0, 0.4], [38.9, 0.0, 0.4], [39.0, 0.0, 0.4],
-      [0.0, -22.9, 0.4], [0.0, -23.0, 0.4], [-24.15454, -24.00259, 0.41844],
-    ])
+  @staticmethod
+  def make_env(positions, *, plane=False):
+    positions = torch.tensor(positions, dtype=torch.float32)
+    generator = SimpleNamespace(num_rows=10, num_cols=6, size=(8.0, 8.0), border_width=10.0)
     class Scene(dict):
-      terrain = SimpleNamespace(cfg=SimpleNamespace(terrain_generator=generator))
+      terrain = SimpleNamespace(cfg=SimpleNamespace(
+        terrain_type="plane" if plane else "generator",
+        terrain_generator=None if plane else generator,
+      ))
+      # Deliberately different tile origins: bounds must use world positions.
       env_origins = positions.clone()
-    env = SimpleNamespace(scene=Scene(robot=SimpleNamespace(data=SimpleNamespace(root_link_pos_w=positions))))
-    self.assertEqual(terrain_grid_boundary(env, 1.0).tolist(), [False, False, True, False, True, True])
+    return SimpleNamespace(num_envs=len(positions), device="cpu", scene=Scene(
+      robot=SimpleNamespace(data=SimpleNamespace(root_link_pos_w=positions)),
+    ))
 
-  def test_optional_timeout_preserves_the_terrain(self):
-    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
-    terrain = cfg.scene.terrain.terrain_generator
-    self.assertNotIn("terrain_grid_boundary", cfg.terminations)
-    configure_terrain_boundary(cfg, 1.0)
-    self.assertIs(cfg.scene.terrain.terrain_generator, terrain)
-    self.assertEqual(terrain.border_width, 10.0)
-    term = cfg.terminations["terrain_grid_boundary"]
-    self.assertTrue(term.time_out)
-    self.assertIs(term.func, terrain_grid_boundary)
+  def test_go2w_variants_enable_boundary_timeout_for_train_and_play(self):
+    tasks = [task for task in list_tasks() if task.startswith("Unitree-Go2W-")]
+    self.assertEqual(len(tasks), 6)
+    for task in tasks:
+      for play in (False, True):
+        with self.subTest(task=task, play=play):
+          cfg = load_env_cfg(task, play=play)
+          term = cfg.terminations["terrain_out_of_bounds"]
+          self.assertIs(term.func, terrain_out_of_bounds)
+          self.assertTrue(term.time_out)
+          self.assertEqual(term.params["distance_buffer"], 3.0)
+          self.assertFalse(cfg.is_finite_horizon)
 
-  def test_rejects_invalid_margin_and_plane(self):
+  def test_outer_boundary_includes_border_on_both_axes_and_sides(self):
+    env = self.make_env([
+      [-36.0, -20.0, 0.4], [-24.15, -24.0026, 0.4],
+      [47.0, 0.0, 0.4], [47.01, 0.0, 0.4],
+      [-47.0, 0.0, 0.4], [-47.01, 0.0, 0.4],
+      [0.0, 31.0, 0.4], [0.0, 31.01, 0.4],
+      [0.0, -31.0, 0.4], [0.0, -31.01, 0.4],
+    ])
+    self.assertEqual(terrain_out_of_bounds(env).tolist(),
+      [False, False, False, True, False, True, False, True, False, True])
+    # A different buffer changes the threshold, including on the border.
+    env.scene["robot"].data.root_link_pos_w[:] = torch.tensor([48.0, 0.0, 0.4])
+    self.assertTrue(terrain_out_of_bounds(env).all())
+    self.assertFalse(terrain_out_of_bounds(env, distance_buffer=1.0).any())
+
+  def test_plane_has_no_boundary(self):
+    env = self.make_env([[1e6, -1e6, 0.4], [-1e6, 1e6, 0.4]], plane=True)
+    result = terrain_out_of_bounds(env)
+    self.assertEqual(result.dtype, torch.bool)
+    self.assertEqual(result.tolist(), [False, False])
+
+  def test_boundary_truncates_without_failure_reward_but_preserves_falls(self):
     cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
-    for margin in (0.0, -1.0, 24.0, float("nan")):
-      with self.subTest(margin=margin), self.assertRaises(ValueError):
-        configure_terrain_boundary(cfg, margin)
-    with self.assertRaises(ValueError):
-      configure_terrain_boundary(load_env_cfg("Unitree-Go2W-Flat"), 1.0)
+    env = self.make_env([
+      [0.0, 0.0, 0.4], [48.0, 0.0, 0.4],
+      [48.0, 0.0, 0.4], [0.0, 0.0, 0.4],
+    ])
+    env.scene["robot"].data.projected_gravity_b = torch.tensor([
+      [0.0, 0.0, -1.0], [0.0, 0.0, -1.0],
+      [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+    ])
+    env.termination_manager = TerminationManager({
+      "terrain_out_of_bounds": cfg.terminations["terrain_out_of_bounds"],
+      "fell_over": cfg.terminations["fell_over"],
+    }, env)
+    self.assertEqual(env.termination_manager.compute().tolist(), [False, True, True, True])
+    self.assertEqual(env.termination_manager.time_outs.tolist(), [False, True, True, False])
+    self.assertEqual(env.termination_manager.terminated.tolist(), [False, False, True, True])
+    rewards = RewardManager({"is_terminated": cfg.rewards["is_terminated"]}, env)
+    torch.testing.assert_close(rewards.compute(dt=0.02), torch.tensor([0.0, 0.0, -4.0, -4.0]))
+    # The next step must clear timeout/failure flags once the robot is reset.
+    env.scene["robot"].data.root_link_pos_w.zero_()
+    env.scene["robot"].data.projected_gravity_b[:] = torch.tensor([0.0, 0.0, -1.0])
+    self.assertFalse(env.termination_manager.compute().any())
+    self.assertFalse(rewards.compute(dt=0.02).any())
 
   def test_recognizes_generated_border_without_hardcoded_geom_ids(self):
     spec = mujoco.MjSpec()

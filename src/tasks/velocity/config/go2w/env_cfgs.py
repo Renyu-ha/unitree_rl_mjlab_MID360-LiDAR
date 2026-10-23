@@ -261,6 +261,10 @@ def _make_go2w_env_cfg(
     func=illegal_contact,
     params={"sensor_name": nonfoot_ground_cfg.name, "force_threshold": 10.0},
   )
+  cfg.terminations["terrain_out_of_bounds"] = TerminationTermCfg(
+    func=mdp.terrain_out_of_bounds, time_out=True,
+    params={"asset_cfg": SceneEntityCfg("robot"), "distance_buffer": 3.0},
+  )
 
   twist = cfg.commands["twist"]
   twist.rel_standing_envs = 0.05

@@ -20,7 +20,6 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 
 from src.utils.training_viewer import LiveTrainingViewer
-from src.utils.terrain_boundary import configure_terrain_boundary
 
 
 @dataclass(frozen=True)
@@ -37,8 +36,6 @@ class TrainConfig:
   viewer_port: int = 8080
   viewer_fps: float = 15.0
   enable_nan_guard: bool = False
-  terrain_boundary_margin: float | None = None
-  """Optional timeout margin inside the terrain grid, in metres; None disables it."""
   torchrunx_log_dir: str | None = None
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 
@@ -95,10 +92,6 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   if cfg.enable_nan_guard:
     cfg.env.sim.nan_guard.enabled = True
     print(f"[INFO] NaN guard enabled, output dir: {cfg.env.sim.nan_guard.output_dir}")
-
-  if cfg.terrain_boundary_margin is not None:
-    configure_terrain_boundary(cfg.env, cfg.terrain_boundary_margin)
-    print(f"[INFO] Terrain grid boundary timeout: {cfg.terrain_boundary_margin} m inside the border")
 
   if rank == 0:
     print(f"[INFO] Logging experiment in directory: {log_dir}")

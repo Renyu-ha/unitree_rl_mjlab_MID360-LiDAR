@@ -199,23 +199,17 @@ wandb sync --sync-tensorboard \
 
 此方式导入旧事件数据，不会自动附带 `.pt` checkpoint 或 NaN 转储。后续新训练直接使用 `--agent.logger=wandb`。
 
-### 外圈边界对照
+### 地图边界重置与外圈检查
 
-Go2W 默认网格为 10 行 × 6 列，每块 8 m × 8 m，因此内部网格边界为 X ±40 m、Y ±24 m。`border_width=10` 生成四块顶面 z=0 的 BOX，向外延伸 10 m；它不是高出地面的围墙。原任务没有专门的网格越界终止。
+Go2W 默认网格为 10 行 × 6 列，每块 8 m × 8 m，因此内部网格边界为 X ±40 m、Y ±24 m。`border_width=10` 生成四块顶面 z=0 的 BOX，向外延伸 10 m；它不是高出地面的围墙。
+
+Go2W 的训练和普通 play 现在默认启用 `terrain_out_of_bounds`，按 IsaacLab 的逻辑将 border 计入整张地图，距地图最外沿保留 `distance_buffer=3.0` m。因此当前训练网格在 `abs(x) > 47` 或 `abs(y) > 31` 时重置；阈值随网格尺寸和 border 自动变化，跨相邻地形块或内部网格与 border 的接缝不会触发。Flat 无限平面不触发边界重置。该项明确配置 `time_out=True`，仅越界时为 `truncated`，不产生 `is_terminated` 惩罚，RSL-RL 仍按超时进行价值补偿；同一步若也翻倒或触发非法接触，失败惩罚仍生效。终端和 W&B 可查看 `Episode_Termination/terrain_out_of_bounds`。`--inspect-border=True` 或 `--no-terminations=True` 仍会关闭自动终止，供受控检查使用。
 
 对实际 `nan_dump_20261023_115651.npz` 与配套模型的分析发现：环境 610 最后两帧机身 Y 从 -23.9999027 m 移到 -24.0025921 m，紧邻下侧外圈；最后两帧 CPU 重建中，左前轮同时接触内部平地 `terrain_2` 与下侧 border `terrain_781`。右前轮更早已接触该 border，100 帧中 CPU 重建的最负接触距离约 -20.45 mm。保存状态全部有限，最后一帧最大关节速度约 18.74 rad/s。它支持优先排查接缝，但不能单凭 CPU 接触重建确认原始 GPU NaN 的算法根因；转储没有保留异常后的加速度、GPU 接触记录或原始动作。
 
 `scripts/viz_nan.py` 会自动识别标准四块外圈，以橙色线框标出，并提供 `Border inspection` 面板：显示各帧机身坐标、内部网格边界和 CPU 重建的 border 接触名称/距离。负距离代表几何侵入；该数值不是原始 GPU 求解结果。
 
-训练入口提供默认关闭的对照选项，在原诊断命令中增加：
-
-```bash
---terrain-boundary-margin=1.0
-```
-
-它保留 border 和全部地形，在机身到达内部网格边界以内 1 m 时将该 episode 作为 timeout 重置。当前默认网格对应 `abs(x) >= 39` 或 `abs(y) >= 23`。新增 `Episode_Termination/terrain_grid_boundary` 统计可在终端/W&B 查看。该保护在控制步末检查，目的是避开外圈接缝，不是物理碰撞修复；它会改变 episode 长度及地形课程所见轨迹。若这样稳定，只能支持“边界区域相关”，不能证明四块 BOX 本身就是唯一根因。
-
-不传该参数时，原任务没有新增终止条件。直接把 `border-width` 设为 0 会移除外圈地面，不能作为无其他影响的等价修复。
+默认外沿截断允许驶入 border，不能避开内部接缝，也不能当作 NaN 修复。直接把 `border-width` 设为 0 会移除外圈地面，不能作为无其他影响的等价修复。
 
 ### 训练时实时可视化
 
