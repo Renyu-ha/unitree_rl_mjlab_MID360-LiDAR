@@ -8,12 +8,10 @@ from pathlib import Path
 
 import mujoco
 
-from mjlab.actuator import BuiltinPositionActuatorCfg
+from mjlab.actuator import BuiltinPositionActuatorCfg, BuiltinVelocityActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.utils.os import update_assets
 from mjlab.utils.spec_config import CollisionCfg
-
-from .wheel_actuator import WheelVelocityActuatorCfg
 
 GO2W_XML = Path(__file__).parent / "xmls" / "go2w.xml"
 LEG_JOINTS = (r".*_(hip|thigh|calf)_joint",)
@@ -76,10 +74,9 @@ def get_go2w_robot_cfg() -> EntityCfg:
           target_names_expr=(".*_calf_joint",),
           stiffness=40.0, damping=2.0, effort_limit=45.0, armature=0.02,
         ),
-        WheelVelocityActuatorCfg(
+        BuiltinVelocityActuatorCfg(
           target_names_expr=WHEEL_JOINTS,
-          damping=2.0, effort_limit=45.0, armature=0.02,
-          velocity_limit=WHEEL_ACTION_SCALE,
+          damping=2.0, effort_limit=45.0, armature=0.0,
         ),
       ),
       soft_joint_pos_limit_factor=0.9,

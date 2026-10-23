@@ -235,6 +235,7 @@ def _make_go2w_env_cfg(
   cfg.rewards.pop("foot_gait")
   cfg.rewards.pop("foot_clearance")
   cfg.rewards.pop("foot_slip")
+  cfg.rewards.pop("angular_momentum")
   cfg.rewards["wheel_spin_contact"] = RewardTermCfg(
     func=wheel_spin_contact, weight=-0.15,
     params={
@@ -254,8 +255,9 @@ def _make_go2w_env_cfg(
   )
   cfg.rewards["track_linear_velocity"].weight = 1.5
   cfg.rewards["track_angular_velocity"].weight = 0.75
+  cfg.rewards["track_angular_velocity"].params["std"] = 0.5
   cfg.rewards["pose"].weight = 0.5
-  cfg.rewards["body_orientation_l2"].weight = -1.5
+  cfg.rewards["body_orientation_l2"].weight = -0.7
   cfg.rewards["action_rate_l2"].weight = -0.03
   cfg.terminations["illegal_contact"] = TerminationTermCfg(
     func=illegal_contact,

@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 import torch
 import mujoco
 import numpy as np
+from mjlab.actuator import BuiltinVelocityActuatorCfg
 from mjlab.entity import Entity
 from mjlab.sensor import ContactSensorCfg, GridPatternCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
@@ -44,7 +45,7 @@ class Go2WTests(unittest.TestCase):
     # Loading the active XML itself must work without the other robot folders
     # or the asset injection performed by Entity/get_spec().
     standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 3))
+    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 2))
 
   def test_loader_does_not_modify_final_xml_definitions(self):
     before = GO2W_XML.read_bytes()
@@ -64,7 +65,7 @@ class Go2WTests(unittest.TestCase):
     for field in fields:
       with self.subTest(field=field):
         np.testing.assert_array_equal(getattr(raw, field), getattr(loaded, field))
-    self.assertEqual(loaded.nsensor, 3)
+    self.assertEqual(loaded.nsensor, 2)
     self.assertEqual(GO2W_XML.read_bytes(), before)
 
   def test_compiled_sensors_match_actual_task_references(self):
@@ -84,7 +85,7 @@ class Go2WTests(unittest.TestCase):
             self.assertIn(name, available, (task, play, name))
             referenced.add(name)
     self.assertEqual(available, referenced)
-    self.assertEqual(available, {"imu_ang_vel", "imu_lin_vel", "root_angmom"})
+    self.assertEqual(available, {"imu_ang_vel", "imu_lin_vel"})
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
@@ -126,6 +127,7 @@ class Go2WTests(unittest.TestCase):
   def test_morphology_and_control_modes(self):
     model = self.model
     self.assertEqual((model.nq, model.nv, model.nu), (23, 22, 16))
+    self.assertIs(type(get_go2w_robot_cfg().articulation.actuators[-1]), BuiltinVelocityActuatorCfg)
     for name in self.robot.joint_names:
       joint = model.joint(name)
       actuator = next(a for a in self.robot.spec.actuators if a.target == name)
@@ -136,8 +138,8 @@ class Go2WTests(unittest.TestCase):
         self.assertAlmostEqual(model.actuator_gainprm[idx, 0], 2.0)
         self.assertAlmostEqual(model.actuator_biasprm[idx, 2], -2.0)
         self.assertAlmostEqual(model.actuator_forcerange[idx, 1], 45.0)
-        self.assertEqual(model.actuator_ctrlrange[idx].tolist(), [-20.0, 20.0])
-        self.assertAlmostEqual(model.dof_armature[joint.dofadr[0]], 0.02)
+        self.assertFalse(model.actuator_ctrllimited[idx])
+        self.assertAlmostEqual(model.dof_armature[joint.dofadr[0]], 0.0)
       else:
         self.assertTrue(joint.limited[0])
         calf = "calf" in name

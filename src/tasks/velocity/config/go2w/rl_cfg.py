@@ -10,7 +10,7 @@ def unitree_go2w_ppo_runner_cfg(stage: str = "v2") -> RslRlOnPolicyRunnerCfg:
       activation="elu",
       obs_normalization=True,
       distribution_cfg={
-        "class_name": "GaussianDistribution", "init_std": 0.5, "std_type": "scalar",
+        "class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar",
       },
     ),
     critic=RslRlModelCfg(
