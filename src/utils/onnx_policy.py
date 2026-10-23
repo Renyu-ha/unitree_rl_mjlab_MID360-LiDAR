@@ -40,7 +40,10 @@ class OnnxPolicy:
         raise ValueError(f"ONNX {key} does not match this task: {self.metadata.get(key)!r} != {expected!r}")
 
     def check_numbers(key, expected):
-      values = np.fromstring(self.metadata.get(key, ""), sep=",")
+      try:
+        values = np.fromstring(self.metadata.get(key, ""), sep=",")
+      except ValueError:
+        raise ValueError(f"ONNX {key} does not match this task") from None
       target = np.asarray(expected).reshape(-1)
       if values.shape != target.shape or not np.allclose(values, target, atol=5e-4):
         raise ValueError(f"ONNX {key} does not match this task")
@@ -50,7 +53,10 @@ class OnnxPolicy:
     check_text("actor_history_length", str(actor.history_length))
     check_text("observation_layout", "term_major_history")
     check_numbers("control_dt", [self.env.step_dt])
-    check_numbers("action_clip", [clip_actions])
+    if clip_actions is None:
+      check_text("action_clip", "None")
+    else:
+      check_numbers("action_clip", [clip_actions])
     base = get_base_metadata(self.env, "local")
     check_text("joint_names", ",".join(base["joint_names"]))
     check_text("command_names", ",".join(base["command_names"]))

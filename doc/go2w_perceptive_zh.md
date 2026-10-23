@@ -46,21 +46,21 @@ Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/uni
 
 此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。此前物理几何曾与参考对齐，当前仅四个轮碰撞几何改为圆柱；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。这些模型调整本身不能视为 NaN 修复。
 
-轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0)`。官方 mjlab 1.2.0 的速度执行器默认从关节位置限位继承控制范围；连续轮关节的空范围会导致 `invalid control range for actuator`。Go2W 资产包导入时自动启用 `src/utils/mjlab_compat.py` 中的兼容处理，各训练子进程导入资产时也会执行，按 ZhongL1 的方式对连续关节设置 `inheritrange=0.0`、`ctrllimited=False`，保留内置执行器类型、速度伺服和力矩限制，有界关节仍沿用原行为。不需要修改训练环境的 `site-packages` 或重新安装 mjlab。原自定义轮执行器已删除；目标转速仍经动作裁剪和缩放限制在 ±20 rad/s。armature 从 0.02 变为 0.0 会改变轮关节的等效惯量，这是独立于编译修复的动力学参数变化。
+轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0)`。官方 mjlab 1.2.0 的速度执行器默认从关节位置限位继承控制范围；连续轮关节的空范围会导致 `invalid control range for actuator`。Go2W 资产包导入时自动启用 `src/utils/mjlab_compat.py` 中的兼容处理，各训练子进程导入资产时也会执行，按 ZhongL1 的方式对连续关节设置 `inheritrange=0.0`、`ctrllimited=False`，保留内置执行器类型、速度伺服和力矩限制，有界关节仍沿用原行为。不需要修改训练环境的 `site-packages` 或重新安装 mjlab。原自定义轮执行器已删除。现按本仓库 G1 基准关闭动作裁剪，轮目标转速为 `20 * action` rad/s，20 不再代表最大转速。armature 从 0.02 变为 0.0 会改变轮关节的等效惯量，这是独立于编译修复的动力学参数变化。
 
 | 项目 | Go2W 实现 |
 | --- | --- |
 | 机器人 | 12 个腿关节 + 4 个连续轮关节，浮动基座 |
 | 动作前 12 维 | 腿关节默认姿态 + `0.5 * action` rad |
 | 动作后 4 维 | `20 * action` rad/s 的轮子速度目标，零偏置 |
-| 动作裁剪 | 归一化动作限制在 [-1, 1]，在缩放之前裁剪 |
+| 动作裁剪 | 与本仓库 G1 一样，`clip_actions=None`，不裁剪策略动作 |
 | 执行器 | 腿使用 PD 位置控制，轮子使用速度控制；轮子力矩上限 45 Nm，参数对齐 ZhongL1 参考资产 |
 | 关节观测 | 12 维腿位置、12 维腿速度、4 维轮速度；不输入累计轮转角 |
 | 奖励 | 姿态和关节位置限制只选腿关节；加入轮子停转与速度代价 |
 | 接触打滑 | 参考 `robot_lab.wheel_spin_contact` 的空转公式，以当前总接触力门控轮周速度与轮体 COM 平移速度的差值 |
 | 行走先验 | 移除四足固定腾空步态与强制足端抬高奖励，允许自主选择滚动和跨步 |
-| 地形 | 2–14 cm 渐进台阶、坡道和粗糙地形；上台阶精调将上行楼梯占比设为 60% |
-| 感知 | v2 使用与 G1 相同的稀疏化课程、丢帧和短时记忆；密集/稀疏观测共用同一前移网格和射线结果 |
+| 地形 | 与对应 G1 阶段相同；v2 上行台阶 4–18 cm，精调上行楼梯占比 60% |
+| 感知 | 与 G1 相同：密集扫描居中，另设前移 0.35 m 的 MID360 扫描；稀疏化、丢帧、噪声、延迟和记忆按阶段对齐 |
 | 导出 | ONNX 附带每个动作的关节名称、位置/速度类型、缩放、偏置、控制周期和历史长度 |
 
 动作顺序由 mjlab 1.2.0 按模型自然关节顺序解析：
@@ -75,9 +75,9 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 
 上面省略 `_joint` 后缀。这与 SDK 的电机顺序不同，实机适配必须使用导出的 `action_joint_names` 映射，不能直接把 16 维动作按索引发给 SDK。
 
-感知任务 Actor 单帧 242 维，3 帧展平后 **726 维**；Critic **269 维**；动作 **16 维**。mjlab 先展平每个观测项的历史再拼接各项，并非把三个完整帧直接拼在一起。平地任务移除高度图，Actor **165 维**、Critic **82 维**。粗糙地形 / v1 / v2 / 精调的观测项顺序与维度保持一致，可以恢复同一 Go2W 系列 checkpoint。Go2/G1 checkpoint 不能直接加载，Go2W Flat checkpoint 也不能直接用于感知任务。
+感知任务 Actor 单帧 242 维；Rough/v1 与 G1 一样使用 1 帧，v2/精调/Step14 使用 3 帧，即 **726 维**；Critic **269 维**；动作 **16 维**。mjlab 先展平每个观测项的历史再拼接各项，并非把三个完整帧直接拼在一起。平地任务移除高度图并使用 1 帧，Actor **55 维**、Critic **82 维**。Rough/v1 与 v2 不再能直接互相恢复 checkpoint；v2/精调/Step14 的张量形状兼容。Go2/G1 checkpoint 仍不能直接加载。
 
-本次对齐范围是机器人资产与初始状态。感知课程、robot_lab 空转奖励及现有动作/观测顺序继续使用本仓库配置；轮动作缩放保留 20 rad/s，参考仓库混合动作 task 使用的是 35 rad/s。对齐前后的 checkpoint 张量形状相同，但默认姿态偏置和执行器动力学已改变，建议使用新运行从头训练，避免把旧策略行为当作新配置的验证结果。
+当前通用训练设置以本仓库自己的 G1 为基准，详细差异与保留项见 [G1 对齐记录](go2w_g1_alignment_zh.md)。机器人资产、轮足动作与 robot_lab 空转奖励继续使用 Go2W 配置；轮动作缩放保留 20 rad/s。旧 v2 checkpoint 虽保持张量形状兼容，动作处理、扫描布局及训练分布已变化，公平对照应创建新运行从头训练。
 
 新文件入口：
 
@@ -91,7 +91,7 @@ Go2W 配置直接从公共根层构建：环境以 `make_velocity_env_cfg()` 为
 
 Go2W 的 Actor/Critic 观测项、传感器、地形项、奖励选择、资产名称及六个任务注册均逐项显式配置；配置文件不使用 `for`/`while`、列表/字典推导式或生成器表达式，回归检查会检查这一约束。接触数据在运行时仍使用张量运算做物理归约。
 
-全部 Go2W 阶段的新训练初始 action std 为 `1.0`；恢复 checkpoint 时会加载其中已训练的分布参数。移除 `angular_momentum` 奖励，角速度跟踪奖励的 `std=0.5`、权重仍为 `0.75`，`pose` 权重为 `0.5`，`body_orientation_l2` 权重为 `-0.7`。
+全部 Go2W 阶段的新训练初始 action std 为 `1.0`；恢复 checkpoint 时会加载其中已训练的分布参数。保留用户指定的角速度跟踪 `std=0.5`、`pose.weight=0.5`、`body_orientation_l2.weight=-0.7`。角速度跟踪权重随对应 G1 阶段取值，v2 为 0.7、精调为 1.15。`angular_momentum` 继续停用，`root_angmom` 保留。普通步态、足抬高和普通足滑移奖励不用于滚动，保留共享轮接触空转奖励；公共身体角速度、动作平滑、落地、停车及自碰撞奖励按 G1 对齐。pose 固定 0.5，因此不启用会覆盖它的 pose 权重课程。
 
 接触打滑参考本地 `robot_lab`（检查时 HEAD 为 `1a8193f`）中 `source/loco_lab/loco_lab/tasks/physx/mdp/rewards/rewards.py::wheel_spin_contact` 的空转公式；该文件的版权与 Apache-2.0 标识保留在迁移文件头部。按本任务需求，接触门控由参考实现的纯法向力改为共享传感器的总接触力，公式为：
 
@@ -205,9 +205,9 @@ wandb sync --sync-tensorboard \
 
 ### 地图边界重置与外圈检查
 
-Go2W 默认网格为 10 行 × 6 列，每块 8 m × 8 m，因此内部网格边界为 X ±40 m、Y ±24 m。`border_width=10` 生成四块顶面 z=0 的 BOX，向外延伸 10 m；它不是高出地面的围墙。
+Go2W 感知训练网格与 G1 一样为 10 行 × 6 列，每块 8 m × 8 m，因此内部网格边界为 X ±40 m、Y ±24 m。训练 `border_width=20`，普通 play 为 10；均生成四块顶面 z=0 的 BOX。旧 NaN 转储来自 border=10 的配置，仍按它配套的旧 MJB 回放。
 
-Go2W 的训练和普通 play 现在默认启用 `terrain_out_of_bounds`，按 IsaacLab 的逻辑将 border 计入整张地图，距地图最外沿保留 `distance_buffer=3.0` m。因此当前训练网格在 `abs(x) > 47` 或 `abs(y) > 31` 时重置；阈值随网格尺寸和 border 自动变化，跨相邻地形块或内部网格与 border 的接缝不会触发。Flat 无限平面不触发边界重置。该项明确配置 `time_out=True`，仅越界时为 `truncated`，不产生 `is_terminated` 惩罚，RSL-RL 仍按超时进行价值补偿；同一步若也翻倒或触发非法接触，失败惩罚仍生效。终端和 W&B 可查看 `Episode_Termination/terrain_out_of_bounds`。`--inspect-border=True` 或 `--no-terminations=True` 仍会关闭自动终止，供受控检查使用。
+Go2W 保留用户要求的 `terrain_out_of_bounds`，按 IsaacLab 的逻辑将 border 计入整张地图，距地图最外沿保留 `distance_buffer=3.0` m。当前感知训练网格在 `abs(x) > 57` 或 `abs(y) > 41` 时重置；阈值随网格尺寸和 border 自动变化，跨内部接缝不会触发。Flat 无限平面不触发边界重置。该项明确配置 `time_out=True`，仅越界时为 `truncated`，不产生 `is_terminated` 惩罚；同一步若也翻倒，失败惩罚仍生效。原额外的 `illegal_contact` 提前终止已移除，终止机制对齐 G1 的 time_out/fell_over 后仅增加边界超时。终端和 W&B 可查看 `Episode_Termination/terrain_out_of_bounds`。`--inspect-border=True` 或 `--no-terminations=True` 仍会关闭自动终止，供受控检查使用。
 
 对实际 `nan_dump_20261023_115651.npz` 与配套模型的分析发现：环境 610 最后两帧机身 Y 从 -23.9999027 m 移到 -24.0025921 m，紧邻下侧外圈；最后两帧 CPU 重建中，左前轮同时接触内部平地 `terrain_2` 与下侧 border `terrain_781`。右前轮更早已接触该 border，100 帧中 CPU 重建的最负接触距离约 -20.45 mm。保存状态全部有限，最后一帧最大关节速度约 18.74 rad/s。它支持优先排查接缝，但不能单凭 CPU 接触重建确认原始 GPU NaN 的算法根因；转储没有保留异常后的加速度、GPU 接触记录或原始动作。
 
@@ -249,7 +249,7 @@ python scripts/train.py Unitree-Go2W-Rough --env.scene.num-envs=4096
 python scripts/train.py Unitree-Go2W-Perceptive-Rough-v1 --env.scene.num-envs=4096
 ```
 
-Rough、v1、v2、精调共用 `go2w_perceptive` 实验目录。恢复时显式选择来源运行，避免误选最近一次实验：
+Rough、v1、v2、精调共用 `go2w_perceptive` 实验目录。当前 v2 的恢复来源应选择 v2/精调/Step14，不要选择单帧 Rough/v1。恢复时显式选择来源运行，避免误选最近一次实验：
 
 ```bash
 python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
@@ -287,7 +287,7 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 
 ### 使用 ONNX 交互检查边界
 
-当前为圆柱轮碰撞实验，四轮半径均为 86 mm、全宽约 51.815 mm；圆柱中心与轴向根据原有 STL 的包围盒和轮关节轴对齐。宽度保留我们原模型的尺寸，没有同时改成其他仓库的 45 mm。外观、质量、惯量、KP/KD、力矩上限、armature、接触参数和奖励保持本次替换前的配置。圆柱前版本为 `6ff9526`；其他开源仓库的形状和参数见[轮足接触配置调研](wheeled_contact_survey_zh.md)。
+当前四轮碰撞体半径均为 86 mm、全宽约 51.815 mm；圆柱中心与轴向根据原有 STL 的包围盒和轮关节轴对齐。宽度保留原模型尺寸，没有同时改成其他仓库的 45 mm。纯圆柱替换提交为 `ea0e9a8`，圆柱前版本为 `6ff9526`；随后又按用户要求进行了上述 G1 通用设置对齐。形状 A/B 应在同一套训练配置下比较，不能将前后多项调整一起归因于圆柱。其他开源仓库的形状和参数见[轮足接触配置调研](wheeled_contact_survey_zh.md)。
 
 ```bash
 python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
@@ -301,6 +301,8 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
 训练圆柱对照组时可在原训练命令上增加 `--agent.run-name=v2_cylinder`，保留其余 NaN guard、观测检查、随机种子与 W&B 参数。优先从相同初始条件重新训练以比较故障发生情况；旧策略可用于接缝交互检查，但动力学已经改变，不能用短时未报错证明 GPU NaN 已解决。
 
 ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图内部负责观测归一化，环境负责动作裁剪、缩放和偏置。入口校验输入输出、观测顺序、历史长度、关节顺序、KP/KD、初始关节角与动作元数据。当前导出文件固定 batch=1，使用一个环境；ONNX 自带 CPU ReferenceEvaluator 可运行，无需另装 onnxruntime。
+
+当前默认关闭动作裁剪，ONNX 中 `action_clip` 为字符串 `None`。旧策略记录为 `1.0` 时会被新默认配置拒绝，避免静默更改策略动作语义。复查旧策略应使用其原配置；新训练后再导出用于当前配置的策略。
 
 `--inspect-border=True` 是受控接触检查：以 seed 42 重建训练地形，关闭自动终止、物理随机化及扰动，从世界坐标 `(-24.2,-23,0.4)` 朝 -Y 出发，保留原始边界。可用 `--spawn-position`、`--spawn-yaw` 改出生位置和朝向。可选 `--reference-model` 会逐项检查几何、网格顶点/面和高度场内容与转储模型一致，若不同则拒绝继续；它不恢复原始 GPU 环境的随机化状态或动作历史，也不覆盖当前配置的碰撞掩码。
 
@@ -343,3 +345,4 @@ ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图�
 - 固定为最终 XML 后，32 项检查通过：模型加载不再增删接口，只读取 XML 与网格；无用传感器和 3 份未使用网格已从文件中删除。155 个编译物理/接口字段与原实现一致，14 份保留网格的内容与参考一致；32 个 CPU MuJoCo 步的状态及全部传感器输出逐值一致。2 个 MJWarp CPU 环境完成 32 步，观测仍为 `(2, 726)` / `(2, 269)` 且有限。六个任务的训练、回放及 PPO 配置共 18 组保持一致；旧 MJB 几何检查已支持清理无用网格后的编号变化，同时继续校验实际使用的网格内容。
 - 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
 - 圆柱轮实验：38 项回归检查通过；新增四轮圆柱中心、半径、宽度、关节轴与质量惯量校验，以及轮子转动 17 个角度时平地接触高度不变的检查。与替换前的编译模型逐项比较，仅四个轮碰撞几何改变，机体力学、关节、执行器、接触参数、网格外观、site 和传感器一致。2 个 MJWarp CPU 环境在最终稀疏感知阶段完成 16 个控制步、1 次 PPO 更新及 ONNX 导出；尚未进行大规模 GPU 训练验证。
+- 按本仓库 G1 对齐通用训练设置后，六个任务的 PPO 和 12 组 train/play 环境对比通过；无裁剪实际探针确认动作 2 产生 40 rad/s 轮目标。单个 MJWarp CPU 环境完成 16 步、1 次 PPO 更新，以及 `action_clip=None` 的 ONNX 导出与推理。此次使用 `--logger tensorboard` 完成检查，本机 W&B 离线后台启动停住的检查已中止。

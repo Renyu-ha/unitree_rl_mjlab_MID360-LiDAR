@@ -4,6 +4,7 @@ Run from the repository root: python -m unittest discover -s tests -v
 """
 
 import ast
+from dataclasses import asdict
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -262,8 +263,7 @@ class Go2WTests(unittest.TestCase):
     for task in tasks:
       cfg = load_env_cfg(task)
       self.assertEqual(set(cfg.actions), {"joint_pos", "wheel_vel"})
-      self.assertFalse(cfg.commands["twist"].heading_command)
-      self.assertIsNone(cfg.commands["twist"].ranges.heading)
+      self.assertTrue(cfg.commands["twist"].heading_command)
       for group in cfg.observations.values():
         self.assertEqual(group.terms["joint_pos"].params["asset_cfg"].joint_names, LEG_JOINTS)
         self.assertEqual(group.terms["wheel_vel"].params["asset_cfg"].joint_names, WHEEL_JOINTS)
@@ -274,9 +274,10 @@ class Go2WTests(unittest.TestCase):
       self.assertIs(cfg.rewards["wheel_spin_contact"].func, wheel_spin_contact)
       for name in ("pose", "stand_still", "joint_pos_limits", "joint_acc_l2"):
         self.assertEqual(cfg.rewards[name].params["asset_cfg"].joint_names, LEG_JOINTS)
-      self.assertEqual(load_rl_cfg(task).clip_actions, 1.0)
+      self.assertIsNone(load_rl_cfg(task).clip_actions)
       if task != "Unitree-Go2W-Flat":
-        schemas.append([(g.history_length, tuple(g.terms)) for g in cfg.observations.values()])
+        if "v2" in task:
+          schemas.append([(g.history_length, tuple(g.terms)) for g in cfg.observations.values()])
         self.assertEqual(load_rl_cfg(task).experiment_name, "go2w_perceptive")
       else:
         self.assertNotIn("height_scan", cfg.observations["actor"].terms)
@@ -293,7 +294,7 @@ class Go2WTests(unittest.TestCase):
     spin = cfg.rewards["wheel_spin_contact"]
     spin_sensor = next(s for s in cfg.scene.sensors if s.name == spin.params["sensor_name"])
     self.assertIs(spin_sensor, sensor)
-    self.assertEqual([s.name for s in cfg.scene.sensors], ["terrain_scan", "feet_ground_contact", "nonfoot_ground_touch"])
+    self.assertEqual([s.name for s in cfg.scene.sensors], ["terrain_scan", "feet_ground_contact", "nonfoot_ground_touch", "self_collision"])
     self.assertIs(type(spin_sensor), ContactSensorCfg)
     self.assertEqual(spin_sensor.primary.pattern, sensor.primary.pattern)
     self.assertEqual(spin_sensor.reduce, "netforce")
@@ -332,13 +333,72 @@ class Go2WTests(unittest.TestCase):
 
   def test_offset_grid_geometry_and_type(self):
     cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
-    sensor = next(s for s in cfg.scene.sensors if s.name == "terrain_scan")
+    sensor = next(s for s in cfg.scene.sensors if s.name == "terrain_scan_mid360")
     self.assertIsInstance(sensor.pattern, GridPatternCfg)
     offsets, directions = sensor.pattern.generate_rays(None, "cpu")
     self.assertEqual(tuple(offsets.shape), (187, 3))
     self.assertAlmostEqual(offsets[:, 0].min().item(), -0.45, places=5)
     self.assertAlmostEqual(offsets[:, 0].max().item(), 1.15, places=5)
     self.assertTrue(torch.all(directions[:, 2] == -1.0))
+
+  def test_generic_training_settings_match_corresponding_g1_tasks(self):
+    pairs = (
+      ("Unitree-Go2W-Flat", "Unitree-G1-Flat"),
+      ("Unitree-Go2W-Rough", "Unitree-G1-Rough"),
+      ("Unitree-Go2W-Perceptive-Rough-v1", "Unitree-G1-Perceptive-Rough-v1"),
+      ("Unitree-Go2W-Perceptive-Rough-v2", "Unitree-G1-Perceptive-Rough-v2"),
+      ("Unitree-Go2W-Perceptive-Rough-v2-StepUp-Finetune", "Unitree-G1-Perceptive-Rough-v2-StepUp-Finetune"),
+      ("Unitree-Go2W-Perceptive-Rough-v2-Step14-Up", "Unitree-G1-Perceptive-Rough-v2-Step14-Up"),
+    )
+    for go2w_task, g1_task in pairs:
+      with self.subTest(task=go2w_task):
+        actual, expected = asdict(load_rl_cfg(go2w_task)), asdict(load_rl_cfg(g1_task))
+        for key in ("experiment_name", "run_name"):
+          actual.pop(key)
+          expected.pop(key)
+        self.assertEqual(actual, expected)
+      for play in (False, True):
+        with self.subTest(task=go2w_task, play=play):
+          actual, expected = load_env_cfg(go2w_task, play=play), load_env_cfg(g1_task, play=play)
+          self.assertEqual(asdict(actual.sim), asdict(expected.sim))
+          terrain, reference_terrain = asdict(actual.scene.terrain), asdict(expected.scene.terrain)
+          # TerrainEntityCfg creates a fresh bound loader for every instance.
+          terrain.pop("spec_fn")
+          reference_terrain.pop("spec_fn")
+          self.assertEqual(terrain, reference_terrain)
+          commands, reference = asdict(actual.commands["twist"]), asdict(expected.commands["twist"])
+          commands.pop("viz")
+          reference.pop("viz")
+          self.assertEqual(commands, reference)
+          self.assertEqual(actual.decimation, expected.decimation)
+          for group in ("actor", "critic"):
+            self.assertEqual(actual.observations[group].history_length, expected.observations[group].history_length)
+            self.assertEqual(actual.observations[group].enable_corruption, expected.observations[group].enable_corruption)
+            for term in expected.observations[group].terms:
+              a, b = asdict(actual.observations[group].terms[term]), asdict(expected.observations[group].terms[term])
+              a.pop("func")
+              b.pop("func")
+              a["params"].pop("asset_cfg", None)
+              b["params"].pop("asset_cfg", None)
+              self.assertEqual(a, b, (group, term))
+          for event in actual.events.keys() & expected.events.keys():
+            a, b = asdict(actual.events[event]), asdict(expected.events[event])
+            a["params"].pop("asset_cfg", None)
+            b["params"].pop("asset_cfg", None)
+            self.assertEqual(a, b, event)
+          for reward in actual.rewards.keys() & expected.rewards.keys() - {"pose", "body_orientation_l2", "track_angular_velocity"}:
+            self.assertEqual(actual.rewards[reward].weight, expected.rewards[reward].weight, reward)
+          self.assertEqual(actual.rewards["pose"].weight, 0.5)
+          self.assertEqual(actual.rewards["body_orientation_l2"].weight, -0.7)
+          self.assertEqual(actual.rewards["track_angular_velocity"].params["std"], 0.5)
+          self.assertEqual(actual.rewards["track_angular_velocity"].weight, expected.rewards["track_angular_velocity"].weight)
+          self.assertNotIn("illegal_contact", actual.terminations)
+          for curriculum in ("command_vel", "track_linear_velocity_weight"):
+            if curriculum in expected.curriculum:
+              self.assertEqual(asdict(actual.curriculum[curriculum]), asdict(expected.curriculum[curriculum]))
+          self.assertNotIn("pose_weight", actual.curriculum)
+          self.assertNotIn("foot_clearance_weight", actual.curriculum)
+          self.assertNotIn("foot_swing_height_weight", actual.curriculum)
 
   def _rolling_env(self, speed=1.0, spin=None, contact=True, num_wheels=4):
     spin = speed / WHEEL_RADIUS if spin is None else spin

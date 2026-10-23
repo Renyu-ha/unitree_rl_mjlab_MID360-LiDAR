@@ -17,7 +17,7 @@ from src.utils.onnx_policy import OnnxPolicy
 
 
 class OnnxPlayTests(unittest.TestCase):
-  def make_fixture(self, path, *, scale=0.5):
+  def make_fixture(self, path, *, scale=0.5, clip_actions=None):
     # Embedded normalization is (obs - 1) / 2. It must run exactly once;
     # action scale/offset/clipping must remain outside the actor.
     graph = helper.make_graph([
@@ -33,7 +33,7 @@ class OnnxPlayTests(unittest.TestCase):
     base = dict(joint_names=joint_names, command_names=["twist"], joint_stiffness=[20]*16,
       joint_damping=[1]*16, default_joint_pos=[0]*16)
     metadata = dict(observation_names="joint_vel", actor_history_length="1",
-      observation_layout="term_major_history", control_dt="0.02", action_clip="1.0",
+      observation_layout="term_major_history", control_dt="0.02", action_clip=str(clip_actions),
       action_joint_names=",".join(joint_names), action_types=",".join(["position"]*12+["velocity"]*4),
       action_scale=",".join(map(str, [scale]*12+[20]*4)), action_offset=",".join(["0"]*16))
     metadata.update({key: ",".join(map(str, value)) for key, value in base.items()})
@@ -53,7 +53,7 @@ class OnnxPlayTests(unittest.TestCase):
       path = Path(directory) / "policy.onnx"
       env, base = self.make_fixture(path)
       with patch("mjlab.rl.exporter_utils.get_base_metadata", return_value=base):
-        policy = OnnxPolicy(path, env, clip_actions=1.)
+        policy = OnnxPolicy(path, env, clip_actions=None)
       torch.testing.assert_close(policy({"actor": torch.full((1, 16), 9.)}), torch.full((1, 16), 4.))
       with self.assertRaisesRegex(ValueError, "NaN/Inf"):
         policy({"actor": torch.full((1, 16), float("nan"))})
@@ -64,7 +64,19 @@ class OnnxPlayTests(unittest.TestCase):
       env, base = self.make_fixture(path, scale=1.)
       with patch("mjlab.rl.exporter_utils.get_base_metadata", return_value=base):
         with self.assertRaisesRegex(ValueError, "action_scale"):
-          OnnxPolicy(path, env, clip_actions=1.)
+          OnnxPolicy(path, env, clip_actions=None)
+
+  def test_clipping_metadata_distinguishes_unclipped_and_legacy_policies(self):
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "policy.onnx"
+      for exported_clip, configured_clip in ((None, 1.), (1., None)):
+        with self.subTest(exported=exported_clip, configured=configured_clip):
+          env, base = self.make_fixture(path, clip_actions=exported_clip)
+          with patch("mjlab.rl.exporter_utils.get_base_metadata", return_value=base):
+            with self.assertRaisesRegex(ValueError, "action_clip"):
+              OnnxPolicy(path, env, clip_actions=configured_clip)
+            policy = OnnxPolicy(path, env, clip_actions=exported_clip)
+          torch.testing.assert_close(policy({"actor": torch.full((1, 16), 9.)}), torch.full((1, 16), 4.))
 
   def test_reference_check_rejects_changed_floor_height(self):
     model = mujoco.MjModel.from_xml_string('<mujoco><worldbody><geom name="floor" type="box" size="4 4 .5" pos="0 0 -.5"/></worldbody></mujoco>')

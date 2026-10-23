@@ -37,13 +37,13 @@ HIM 仓库另有 MuJoCo XML，但其训练任务配置指向 URDF；不能用旁
 | 公共 robot_lab / Go2W | ImplicitActuator，0 / 0.5 | 配置 joint effort=23.5 Nm | 5 | 25 / 0.5；髋 0.125、其他 0.25 | 0.005 / 4 |
 | 公共 robot_lab / B2W | 轮 ImplicitActuator，0 / 1 | 20 Nm | 5 | 腿 DC motor，160 / 5；髋 0.125、其他 0.25 | 0.005 / 4 |
 | Wheel-Legged-Gym | 显式算力矩，0 / 0.5 | URDF effort=5 Nm，代码裁剪 | 10 | 40 / 1；0.5 | 0.005 / 2，100 Hz 策略 |
-| 我们 Go2W | MuJoCo BuiltinVelocity，速度增益 2 | 45 Nm | 20，原始动作先裁剪 ±1 | 髋/大腿 20 / 1，小腿 40 / 2；0.5 | 0.005 / 4 |
+| 我们 Go2W | MuJoCo BuiltinVelocity，速度增益 2 | 45 Nm | 20；现与本仓库 G1 一样不裁剪动作 | 髋/大腿 20 / 1，小腿 40 / 2；0.5 | 0.005 / 4 |
 
 配置来源：[HIM][him-cfg]及[力矩实现][him-runtime]、[DreamWaQ][dream-cfg]及[力矩实现][dream-runtime]、[robot_lab 资产][rl-asset]与 [Go2W][rl-go2-cfg] / [B2W][rl-b2-cfg] 任务、[双轮任务][wlg-cfg]与[公共基类][wlg-base]。
 
 此前采用的 [ZhongL1/mjlab 资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py) 本身就使用 BuiltinVelocity、轮速度增益 2、力矩上限 45 Nm、armature=0.02；我们的 2 / 45 来源于这份配置，轮 armature 后按用户实验要求设为 0。它说明 Go2W 参数并非所有仓库都取 0.5 / 23.5，比较时还要考虑同一仿真后端和模型版本。
 
-动作 scale 是换算系数，不能直接解释为最大轮速。HIM、DreamWaQ 与双轮项目的 `clip_actions=100`；公共 robot_lab 任务另设 action clip，语义也应按所用 IsaacLab 版本核对。我们的原始动作在缩放前裁剪到 ±1，所以当前速度目标范围为 ±20 rad/s；这与仿真的实际轮速约束仍是不同概念。HIM/DreamWaQ 的 URDF wheel velocity 声明为 30.1 rad/s，公共 robot_lab Go2W 执行器声明 30 rad/s，B2W 为 50 rad/s；声明速度限制不代表所有显式力矩路径都主动裁剪轮速。
+动作 scale 是换算系数，不能直接解释为最大轮速。HIM、DreamWaQ 与双轮项目的 `clip_actions=100`；公共 robot_lab 任务另设 action clip，语义也应按所用 IsaacLab 版本核对。我们在初次迁移中曾裁剪原始动作到 ±1，后按用户要求与本仓库 G1 对齐而关闭；当前轮目标为 `20 * action`，不是限制在 ±20 rad/s。HIM/DreamWaQ 的 URDF wheel velocity 声明为 30.1 rad/s，公共 robot_lab Go2W 执行器声明 30 rad/s，B2W 为 50 rad/s；声明速度限制不代表所有显式力矩路径都主动裁剪轮速。
 
 HIM 与双轮 AssetOptions armature=0；DreamWaQ 同样继承 0，且 `wheel_armature_add=0`。我们当前轮 armature=0，腿为 0.01/0.02。圆柱替换不调整这些参数。公开 robot_lab 的资产配置没有在这里显式设置轮 armature，不假定其依赖库默认值与 MuJoCo 相同。
 
@@ -54,7 +54,7 @@ HIM 与双轮 AssetOptions armature=0；DreamWaQ 同样继承 0，且 `wheel_arm
 | HIM 与 DreamWaQ | PhysX TGS；位置迭代 4、速度迭代 0；contact_offset=0.01 m、rest_offset=0；max_depenetration_velocity=1 m/s；substeps=1 | 启用，0.25–1.25；地形静/动摩擦各 0.8 |
 | Wheel-Legged-Gym | 同样 TGS 4/0、offset 0.01/0、最大去穿透速度 1 | 启用，0.1–2.0 |
 | 公共 robot_lab | PhysX 资产 Go2W 4/1、B2W 4/0，最大去穿透速度 1；另提供 Newton 配置，不将 PhysX 参数当成另一后端的实际设置 | 公共事件静摩擦 0.3–1.0、动摩擦 0.3–0.8、恢复系数 0–0.5 |
-| 我们 Go2W | MuJoCo/MJWarp；iterations=10、ls_iterations=20、ccd_iterations=50；命名碰撞体 condim=3、priority=0 | 轮碰撞体 geom friction 启动随机化 0.3–1.6；四轮共享抽样 |
+| 我们 Go2W v2 | MuJoCo/MJWarp；iterations=10、ls_iterations=20、ccd_iterations=50；命名碰撞体 condim=3、priority=0 | 现对齐本仓库 G1 v2，轮 geom friction 启动随机化 0.25–1.8；四轮共享抽样 |
 
 来源：[HIM 基类][him-base]、[DreamWaQ 基类][dream-base]、[双轮基类][wlg-base]、[robot_lab 资产][rl-asset]及[公共环境][rl-env]。PhysX `contact_offset`、MuJoCo `margin`、软约束 `solref/solimp` 不是一一对应的参数，求解器迭代次数也不能直接横向比较。MuJoCo 的接触参数解释见[官方模型文档](https://mujoco.readthedocs.io/en/stable/modeling.html#solver-parameters)。
 
@@ -71,7 +71,7 @@ HIM 与双轮 AssetOptions armature=0；DreamWaQ 同样继承 0，且 `wheel_arm
 
 ## 5. 本仓库的对照方式
 
-先只替换四个轮碰撞体：保持原模型 86 mm 半径、约 51.815 mm 宽度和中心位置，保留质量/惯量、速度增益 2、力矩 45 Nm、scale 20、自碰撞及接触随机化。圆柱前版本为 `6ff9526`，不要为了取回旧轮子而丢掉后续独立的 NaN 检查改动。
+最初圆柱实验仅替换四个轮碰撞体，提交为 `ea0e9a8`，圆柱前版本为 `6ff9526`。随后用户要求通用设置与本仓库 G1 对齐，已关闭动作裁剪并更新感知、随机化、地形与课程，详见 [G1 对齐记录](go2w_g1_alignment_zh.md)。若做纯碰撞形状的 A/B 比较，应在同一套训练设置下仅改变轮碰撞几何，不能直接把前后多项改动的结果归因于圆柱。
 
 圆柱版已经通过编译模型差异检查、38 项回归检查，以及 2 个 MJWarp CPU 环境的 16 个控制步、1 次 PPO 更新和 ONNX 导出。它仍需在原 GPU 训练规模下，使用相同种子、课程阶段和 NaN 检查做对照。旧 MJB 的严格几何校验会正确拒绝新圆柱模型；交互检查与训练命令见[Go2W 说明](go2w_perceptive_zh.md#使用-onnx-交互检查边界)。
 

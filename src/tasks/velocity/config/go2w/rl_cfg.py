@@ -34,10 +34,8 @@ def unitree_go2w_ppo_runner_cfg(stage: str = "v2") -> RslRlOnPolicyRunnerCfg:
     ),
     experiment_name="go2w_flat" if stage == "flat" else "go2w_perceptive",
     run_name=stage,
-    logger="tensorboard",
-    upload_model=False,
-    clip_actions=1.0,
+    clip_actions=None,
     save_interval=100,
     num_steps_per_env=24,
-    max_iterations=4000 if stage == "stepup" else (30001 if stage == "v2" else 15001),
+    max_iterations=4000 if stage == "stepup" else (30001 if stage == "v2" else (15001 if stage == "v1" else 10001)),
   )

@@ -16,6 +16,7 @@ def main():
   parser.add_argument("--num-envs", type=int, default=4)
   parser.add_argument("--steps", type=int, default=32)
   parser.add_argument("--device", default="cuda:0")
+  parser.add_argument("--logger", choices=("tensorboard", "wandb"), help="Override the task logger for this smoke test only.")
   parser.add_argument("--train-iterations", type=int, default=1)
   parser.add_argument("--checkpoint", type=Path, help="Optional Go2W checkpoint to verify stage compatibility.")
   parser.add_argument("--fully-sparse", action="store_true", help="Exercise the final MID360 curriculum stage immediately.")
@@ -41,9 +42,19 @@ def main():
   env = ManagerBasedRlEnv(cfg=cfg, device=args.device)
   try:
     agent = load_rl_cfg(args.task)
+    if args.logger is not None:
+      agent.logger = args.logger
     wrapped = RslRlVecEnvWrapper(env, clip_actions=agent.clip_actions)
     obs, _ = wrapped.reset()
     assert wrapped.num_actions == 16
+    if agent.clip_actions is None:
+      probe = torch.zeros(args.num_envs, 16, device=args.device)
+      probe[:, 12:] = 2.0
+      wrapped.step(probe)
+      torch.testing.assert_close(env.sim.data.ctrl[:, -4:], torch.full((args.num_envs, 4), 40.0, device=args.device))
+      assert (env.sim.data.actuator_force[:, -4:].abs() <= 45.001).all()
+      obs, _ = wrapped.reset()
+      print("Unclipped action probe passed: action=2 produces a 40 rad/s wheel target.")
     for _ in range(args.steps):
       obs, rewards, _, _ = wrapped.step(torch.zeros(args.num_envs, 16, device=args.device))
       assert torch.isfinite(rewards).all()
@@ -65,6 +76,13 @@ def main():
       metadata = {entry.key: entry.value for entry in model.metadata_props}
       assert len(metadata["action_joint_names"].split(",")) == 16
       assert metadata["action_types"].split(",") == ["position"] * 12 + ["velocity"] * 4
+      assert metadata["action_clip"] == str(agent.clip_actions)
+      # ONNX play requires a single environment because exports use batch=1.
+      if args.num_envs == 1:
+        from src.utils.onnx_policy import OnnxPolicy
+        policy = OnnxPolicy(directory / "policy.onnx", wrapped, clip_actions=agent.clip_actions)
+        action = policy(obs)
+        assert torch.isfinite(action).all()
       print("PPO update and ONNX export passed:", directory.resolve())
   finally:
     env.close()
