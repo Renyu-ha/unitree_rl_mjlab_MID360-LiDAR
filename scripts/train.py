@@ -20,6 +20,7 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 
 from src.utils.training_viewer import LiveTrainingViewer
+from src.utils.nan_capture import install_nan_capture
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   )
 
   try:
+    install_nan_capture(env.sim)
     log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
     resume_path: Path | None = None

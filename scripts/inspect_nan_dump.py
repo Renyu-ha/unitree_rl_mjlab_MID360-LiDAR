@@ -1,10 +1,10 @@
-"""Compare native MuJoCo and Warp at a saved pre-failure state, without PPO.
+"""Summarize recorded failures or probe a finite input state, without PPO.
 
 Example:
   python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_latest.npz
 
-Controls are synthetic finite hold targets. The dump does not contain the
-original controls, warmstarts, or the randomized per-environment model.
+The optional replay probe uses synthetic finite hold targets. New dumps also
+contain original inputs and failure arrays, reported separately from replay.
 """
 
 import argparse
@@ -32,16 +32,54 @@ def finite_summary(data, fields):
   return result
 
 
+def recorded_summary(archive):
+  keys = sorted(key for key in archive.files if key.startswith("states_step_"))
+  metadata = json.loads(str(archive["metadata_json"].item())) if "metadata_json" in archive else {}
+  invalid = [key for key in keys if not np.isfinite(archive[key]).all()]
+  fields = {}
+  for key in archive.files:
+    if not key.startswith("failure_"):
+      continue
+    value = archive[key]
+    finite = np.isfinite(value)
+    fields[key] = {
+      "shape": list(value.shape), "nonfinite_count": int((~finite).sum()),
+      "nonfinite_indices": np.argwhere(~finite)[:20].tolist(),
+    }
+  return {
+    "has_recorded_failure": bool(metadata.get("failure_state_key")),
+    "failure_stage": metadata.get("failure_stage"),
+    "failure_state_key": metadata.get("failure_state_key"),
+    "model_file": metadata.get("model_file"),
+    "versions": metadata.get("versions"),
+    "dumped_env_ids": metadata.get("dumped_env_ids"),
+    "nonfinite_fields": metadata.get("nonfinite_fields"),
+    "num_frames": len(keys), "invalid_stored_state_keys": invalid,
+    "fields": fields,
+    "note": metadata.get("note", "Legacy pre-step history only. The failure result, "
+                         "acceleration, controls and original GPU contacts are absent."),
+  }
+
+
 def inspect(args):
-  model_path = args.model
-  if model_path is None:
-    model_path = args.dump.with_name(args.dump.name.replace("nan_dump_", "model_")).with_suffix(".mjb")
-  model = mujoco.MjModel.from_binary_path(str(model_path))
   with np.load(args.dump, allow_pickle=False) as archive:
+    recorded = recorded_summary(archive)
     keys = sorted(key for key in archive.files if key.startswith("states_step_"))
     key = keys[args.frame]
-    saved = archive[key]
-    state = np.asarray(saved[args.dump_index])
+    state = np.asarray(archive[key][args.dump_index])
+  print("Recorded data:", json.dumps(recorded, indent=2), flush=True)
+  if args.summary_only or key == recorded["failure_state_key"]:
+    if args.output:
+      args.output.parent.mkdir(parents=True, exist_ok=True)
+      args.output.write_text(json.dumps(recorded, indent=2), encoding="utf-8")
+    if not args.summary_only:
+      print("Selected frame is the recorded failure. Use --frame=-2 for a synthetic pre-failure probe.")
+    return recorded
+  model_path = args.model
+  if model_path is None:
+    model_path = (args.dump.parent / recorded["model_file"] if recorded["model_file"] else
+                  args.dump.with_name(args.dump.name.replace("nan_dump_", "model_")).with_suffix(".mjb"))
+  model = mujoco.MjModel.from_binary_path(str(model_path))
   if not np.isfinite(state).all():
     raise ValueError("Selected input state already contains NaN/Inf.")
   if args.wheel_margin is not None:
@@ -87,6 +125,7 @@ def inspect(args):
     "model": str(model_path.resolve()),
     "state_key": key,
     "dump_index": args.dump_index,
+    "recorded_data": recorded,
     "wheel_margin_override": args.wheel_margin,
     "note": "Synthetic finite hold controls and zero warmstart; not the original training inputs or randomized world model. Native and Warp contact-distance margin conventions can differ.",
     "native": {
@@ -153,6 +192,7 @@ if __name__ == "__main__":
   parser.add_argument("--model", type=Path)
   parser.add_argument("--device", default="cpu", help="Warp device, e.g. cpu or cuda:0")
   parser.add_argument("--frame", type=int, default=-1)
+  parser.add_argument("--summary-only", action="store_true", help="Report original stored fields without replay or requiring an MJB.")
   parser.add_argument("--dump-index", type=int, default=0, help="Index among the environments stored in the dump.")
   parser.add_argument("--wheel-margin", type=float, help="Optional in-memory probe; does not change model/config files.")
   parser.add_argument("--output", type=Path)

@@ -63,6 +63,13 @@ def add_border_inspection(viewer) -> None:
     frame = int(viewer.step_slider.value)
     env_index = int(viewer.env_slider.value) if hasattr(viewer, "env_slider") else 0
     key = viewer.state_keys[frame]
+    if not np.isfinite(viewer.dump[key][env_index]).all():
+      report.content = (
+        f"Frame **{frame}**, environment **{viewer.dumped_env_ids[env_index]}**\n\n"
+        "The recorded physics state contains NaN/Inf. CPU border contacts "
+        "cannot be reconstructed for this frame. Inspect the recorded failure_* arrays."
+      )
+      return
     # Separate CPU data avoids sharing the playback callback's mutable MjData.
     data = mujoco.MjData(viewer.model)
     mujoco.mj_setState(viewer.model, data, viewer.dump[key][env_index], mujoco.mjtState.mjSTATE_PHYSICS)

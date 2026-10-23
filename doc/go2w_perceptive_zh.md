@@ -139,7 +139,9 @@ RSL-RL 的 `The observation group 'critic' ... contains NaN` 只指出组名，�
 NaN/Inf detected in observation 'critic/foot_contact_forces' for environments: [1]
 ```
 
-物理 NaN guard 则检查 `qpos`、`qvel`、`qacc`、`qacc_warmstart` 和 `sensordata`，保存发散前的状态序列与模型。两种检查配合使用；不应通过 `sanitize` 或 `nan_to_num` 掩盖尚未定位的错误。
+开启物理 NaN guard 后，`scripts/train.py` 会安装本仓库的 `PhysicsNanCapture`，覆盖每个物理 `step()` 和控制步末尾额外的 `forward()`。它检查位置、速度、加速度、warmstart、传感器、控制输入与力；首次检出 NaN/Inf 时先保存现场，再抛出异常停止训练，防止自动 reset 覆盖异常。观测逐项检查仍需配合开启；不应通过 `sanitize` 或 `nan_to_num` 掩盖尚未定位的错误。
+
+旧版 mjlab guard 的采集顺序是“保存步前状态 → 执行 step → 检测”，并未保存触发检测的步后状态。它虽然检查加速度和传感器，旧 NPZ 却只保留 `qpos/qvel/act`。因此旧回放末尾姿态正常是采集方式的结果，不能说明实际故障时关节角或其他字段正常；旧文件也无法补回漏记的数据。
 
 上传 W&B 前，在训练机环境中安装兼容依赖并登录。当前 RSL-RL 5.0.1 的 W&B 接口传入 `start_method`，该参数从 [W&B 0.29.0](https://github.com/wandb/wandb/releases/tag/v0.29.0) 起被删除；本仓库约束 `wandb>=0.22.3,<0.29`，本地使用 0.28.2 验证。更新仓库后执行：
 
@@ -187,9 +189,19 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 python scripts/viz_nan.py logs/go2w_nan_dump/nan_dump_latest.npz
 ```
 
-本地回放入口沿用 mjlab 的 NaN 查看器，并补上 `Groups` 几何分组控制。在 `Groups → Geoms` 中关闭 `G2`（Go2W 外观网格），开启 `G3`（真实碰撞体），保留 `G0/G1` 地形。`Contacts → Points/Forces` 显示 CPU 重算的接触点和力。通过 `Playback → Step` 逐帧查看，页面 `Environment` 信息显示原始环境编号；只转储一个环境时，回放索引 0 就是该环境，不需要选择其原始编号。
+本地回放默认停在最后一帧，区分 `PRE-OPERATION STATE` 与 `RECORDED FAILURE`，并显示异常字段的非有限值数量和 `before/after_step/forward` 阶段。在 `Groups → Geoms` 中关闭 `G2`（Go2W 外观网格），开启 `G3`（真实碰撞体），保留 `G0/G1` 地形。场景仅用 CPU 重建接触位置，不运行接触力求解；力箭头不可用。通过 `Playback → Step` 逐帧查看，页面 `Environment` 信息显示原始环境编号；只转储一个环境时，回放索引 0 就是该环境，不需要选择其原始编号。
 
-例如日志记录的环境 610，应打开同一时间配套的 `nan_dump_20261023_115651.npz` 与 `model_20261023_115651.mjb`；把最后若干帧来回拖动，查看轮、腿、机身与台阶的相对位置。检查时应看碰撞体，而非只看外观网格之间是否重叠。guard 在每个物理步执行前捕获状态，最后一帧未必包含异常发生后的姿态；没有看到明显穿透也不能排除单步接触数值异常。该回放不包含完整训练随机状态、动作序列和每个 GPU 环境的随机化参数，CPU 重算的接触也不等于原始 Warp 接触记录。若要对比 Newton/CG，先保留原设置抓一次，再用 `--env.sim.mujoco.solver=cg` 单独做对照，不能将换求解器后暂未报错当作根因已确认。
+新版 NPZ 在步前历史之后额外追加故障帧，保留实际 NaN/Inf。`failure_qpos/qvel/qacc/qacc_warmstart/sensordata/ctrl` 等为原始设备结果，`failure_contact_*` 按原始环境编号保存 Warp 接触几何、点、距离、局部坐标系和约束地址，`failure_efc_*` 保留约束雅可比和约束力（有效行数见 `failure_nefc`）。每帧 `inputs_step_*` 保存原始控制、warmstart 和外力；`model_*` 保存选中环境的展开模型字段，MJB 仍是基础模型。旁边的 JSON 记录错误阶段、环境和依赖版本。这些数据用于定位，尚不是完整可确定重现训练的 checkpoint。
+
+关节角已经 NaN 时不存在可绘制的有效姿态，回放会明确提示并显示同一环境最近的有限姿态；不会把 NaN 角度改成零或伪造“炸飞”动画。加速度或传感器先 NaN、关节角尚有限时，画面仍可能正常，应以 `RECORDED FAILURE` 的原始字段为准。旧 NPZ 会标注缺少故障结果。可直接查看记录摘要：
+
+```bash
+python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_latest.npz --summary-only
+```
+
+新版文件默认摘要故障帧；需要对步前有限状态做合成 hold-control 探针时使用 `--frame=-2`。该探针仍使用合成控制，不会自动恢复记录的随机化模型或原始训练动作。
+
+例如旧日志记录的环境 610，应打开同一时间配套的 `nan_dump_20261023_115651.npz` 与 `model_20261023_115651.mjb`；把最后若干帧来回拖动，查看轮、腿、机身与台阶的相对位置。检查时应看碰撞体，而非只看外观网格之间是否重叠。该旧文件的末帧是步前状态，没有异常后的加速度、原始控制、GPU 接触和逐环境随机化参数；CPU 重建接触不能替代原始 Warp 数据。若要对比 Newton/CG，先保留原设置抓一次，再用 `--env.sim.mujoco.solver=cg` 单独做对照，不能将换求解器后暂未报错当作根因已确认。
 
 训练机暂时无法联网时，将 `WANDB_MODE=offline`，其余 W&B 参数保留；联网后运行 `wandb sync wandb/offline-run-<本次运行目录>`。W&B 离线目录与 `logs/rsl_rl/...` 目录是两种不同的数据，不应把普通 TensorBoard 目录直接当作 W&B 离线运行目录同步。
 
