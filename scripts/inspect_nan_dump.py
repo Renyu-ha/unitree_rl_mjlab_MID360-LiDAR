@@ -114,9 +114,9 @@ def inspect(args):
       mjw.fwd_position(wm, wd, factorize=False)
       wp.synchronize()
       count = int(wd.nacon.numpy()[0])
-      geoms = wd.contact.geom.numpy()[:count]
-      distances = wd.contact.dist.numpy()[:count]
-      positions = wd.contact.pos.numpy()[:count]
+      geoms = wd.contact.geom.numpy()[:count].copy()
+      distances = wd.contact.dist.numpy()[:count].copy()
+      positions = wd.contact.pos.numpy()[:count].copy()
       mjw.forward(wm, wd)
       wp.synchronize()
       result = {
