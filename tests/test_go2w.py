@@ -69,6 +69,30 @@ class Go2WTests(unittest.TestCase):
     self.assertEqual(loaded.nsensor, 3)
     self.assertEqual(GO2W_XML.read_bytes(), before)
 
+  def test_native_ccd_supports_robot_on_box_terrain(self):
+    import mujoco_warp as mjw
+    import warp as wp
+
+    spec = get_spec()
+    spec.worldbody.add_geom(
+      name="regression_terrain", type=mujoco.mjtGeom.mjGEOM_BOX,
+      size=(4.0, 4.0, 0.5), pos=(0.0, 0.0, -0.5),
+    )
+    model = spec.compile()
+    self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_NATIVECCD)
+    self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_MULTICCD)
+    for name in ("base_link_collision0", "FL_thigh_collision", "FR_thigh_collision",
+                 "RL_thigh_collision", "RR_thigh_collision"):
+      self.assertEqual(model.geom(name).margin[0], 0.0)
+    for leg in ("FL", "FR", "RL", "RR"):
+      self.assertAlmostEqual(model.geom(f"{leg}_wheel_link_collision").margin[0], 0.001)
+    # Native compilation alone missed the 3.16 box-margin limitation. Check the
+    # actual Warp import with a terrain box and both engine defaults enabled.
+    wp.init()
+    with wp.ScopedDevice("cpu"):
+      warp_model = mjw.put_model(model)
+    self.assertEqual(warp_model.ngeom, model.ngeom)
+
   def test_task_sensor_references_exist_with_retained_telemetry(self):
     available = {self.model.sensor(index).name for index in range(self.model.nsensor)}
     referenced = set()

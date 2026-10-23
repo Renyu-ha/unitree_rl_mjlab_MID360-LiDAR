@@ -1,5 +1,9 @@
 # 仓库感知运控解析与 Go2W 训练迁移
 
+本分支对齐 mjlab 最新主线 `8bb2bc9e`，使用 MuJoCo / mujoco-warp 3.16.0、Warp 1.18.0、RSL-RL 5.5.1。安装采用 Conda + pip，具体步骤和核心版本约束见 [安装说明](setup_zh.md)。
+
+3.16 的碰撞兼容调整仅将机身和四个大腿箱体的 `margin` 显式设为 0，满足该版本 native CCD / MultiCCD 的限制；轮子仍保留 1 mm margin。几何尺寸、控制参数和自碰撞保持原配置。
+
 ## 1. 原仓库如何实现感知运控
 
 这是一个速度指令驱动的局部地形感知强化学习控制器。策略直接输出关节动作；当前训练链路没有单独的全局建图、路径规划、落脚点规划模块，也没有独立的点云网络或 teacher/student 蒸馏阶段。
@@ -46,7 +50,7 @@ Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/uni
 
 此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。当前碰撞使用 `condim=3`、`priority=0`，摩擦继承 XML，自碰撞按用户要求开启。此前物理几何曾与参考对齐，当前仅四个轮碰撞几何改为圆柱；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。这些模型调整本身不能视为 NaN 修复。
 
-轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0)`。官方 mjlab 1.2.0 的速度执行器默认从关节位置限位继承控制范围；连续轮关节的空范围会导致 `invalid control range for actuator`。Go2W 资产包导入时自动启用 `src/utils/mjlab_compat.py` 中的兼容处理，各训练子进程导入资产时也会执行，按 ZhongL1 的方式对连续关节设置 `inheritrange=0.0`、`ctrllimited=False`，保留内置执行器类型、速度伺服和力矩限制，有界关节仍沿用原行为。不需要修改训练环境的 `site-packages` 或重新安装 mjlab。原自定义轮执行器已删除。现按本仓库 G1 基准关闭动作裁剪，轮目标转速为 `20 * action` rad/s，20 不再代表最大转速。armature 从 0.02 变为 0.0 会改变轮关节的等效惯量，这是独立于编译修复的动力学参数变化。
+轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0, frictionloss=0.0)`。新 mjlab 原生速度执行器已支持连续关节，自动设置 `inheritrange=0.0`、`ctrllimited=False`；旧 1.2.0 环境使用的 `src/utils/mjlab_compat.py` 补丁已移除。显式 `frictionloss=0.0` 保持旧训练的有效摩擦值，避免新版默认继承 XML 摩擦而改变动力学。现按本仓库 G1 基准关闭动作裁剪，轮目标转速为 `20 * action` rad/s，20 不代表最大转速。armature 从 0.02 变为 0.0 是此前用户指定的模型调整，本次版本升级没有再改变它。
 
 | 项目 | Go2W 实现 |
 | --- | --- |
@@ -63,7 +67,7 @@ Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/uni
 | 感知 | 与 G1 相同：密集扫描居中，另设前移 0.35 m 的 MID360 扫描；稀疏化、丢帧、噪声、延迟和记忆按阶段对齐 |
 | 导出 | ONNX 附带每个动作的关节名称、位置/速度类型、缩放、偏置、控制周期和历史长度 |
 
-动作顺序由 mjlab 1.2.0 按模型自然关节顺序解析：
+动作顺序由 mjlab 按模型自然关节顺序解析：
 
 ```text
 FL_hip, FL_thigh, FL_calf,
@@ -107,18 +111,16 @@ reward_term = -0.15 * sum_i(contact_i * spin_i)
 
 ## 3. 安装与训练
 
-建议按原仓库使用 Ubuntu、Python 3.11 和 NVIDIA CUDA 环境。`setup.py` 固定 `mjlab==1.2.0`、`mujoco==3.5.0`、`mujoco-warp==3.5.0`、`warp-lang==1.12.0`，并补上地形模块需要的 SciPy；避免新版本 MuJoCo 删除旧版 Warp 所需枚举导致导入失败。先按 mjlab 安装说明准备 CUDA 版 PyTorch，再在仓库根目录执行：
+建议使用 Ubuntu、Python 3.11 和 NVIDIA CUDA 环境。先按 [Conda 安装说明](setup_zh.md) 创建环境并安装 PyTorch，再在仓库根目录执行：
 
 ```bash
-pip install -e .
+python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
 python scripts/list_envs.py
 python -m unittest discover -s tests -v
-python scripts/smoke_go2w.py --task Unitree-Go2W-Perceptive-Rough-v2
+python scripts/check_go2w_upgrade.py --device cuda:0 --num-envs 2 --steps 64 --learn-iterations 2
 ```
 
-冒烟脚本默认使用 4 个环境，检查 reset、32 个控制步、有限观测/奖励、1 次 PPO 更新和 ONNX 导出。输出位于 `logs/go2w_smoke/`；它不是训练收敛或过台阶成功率测试。
-
-可加 `--device cpu --num-envs 2` 进行小规模 CPU 验证，或加 `--fully-sparse` 立即检查最终稀疏感知阶段。`--checkpoint <路径>` 用于检查从兼容 Go2W 感知 checkpoint 恢复。
+升级检查脚本验证 reset、有限观测/奖励、部分重置、PPO 更新、checkpoint 保存/加载与 ONNX 导出，输出位于 `logs/upgrade_check/`。CPU 上将 `cuda:0` 改为 `cpu`。它不是训练收敛或过台阶成功率测试。
 
 ### 推荐：直接训练 v2
 
@@ -143,10 +145,10 @@ NaN/Inf detected in observation 'critic/foot_contact_forces' for environments: [
 
 旧版 mjlab guard 的采集顺序是“保存步前状态 → 执行 step → 检测”，并未保存触发检测的步后状态。它虽然检查加速度和传感器，旧 NPZ 却只保留 `qpos/qvel/act`。因此旧回放末尾姿态正常是采集方式的结果，不能说明实际故障时关节角或其他字段正常；旧文件也无法补回漏记的数据。
 
-上传 W&B 前，在训练机环境中安装兼容依赖并登录。当前 RSL-RL 5.0.1 的 W&B 接口传入 `start_method`，该参数从 [W&B 0.29.0](https://github.com/wandb/wandb/releases/tag/v0.29.0) 起被删除；本仓库约束 `wandb>=0.22.3,<0.29`，本地使用 0.28.2 验证。更新仓库后执行：
+上传 W&B 前，在训练机 Conda 环境中安装依赖并登录。本分支已升级到 RSL-RL 5.5.1，W&B 跟随该 mjlab 主线的依赖声明，不再沿用旧 RSL-RL 5.0.1 的版本约束。更新仓库后执行：
 
 ```bash
-pip install -e .
+python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
 wandb login
 export WANDB_USERNAME='你的W&B用户名或团队名'
 export WANDB_MODE=online

@@ -1,4 +1,4 @@
-"""Package metadata lives in pyproject.toml; install this branch with uv sync."""
+"""Package metadata lives in pyproject.toml; install with pip in a Conda environment."""
 
 from setuptools import setup
 

@@ -1,8 +1,8 @@
 """Exercise the upgraded Go2W sensors, physics, reset, PPO and checkpoint export.
 
-Run with the locked environment, e.g.:
-  uv run --extra cpu python scripts/check_go2w_upgrade.py --learn-iterations 2
-  uv run --extra cu126 python scripts/check_go2w_upgrade.py --device cuda:0
+Run after activating the Conda environment, e.g.:
+  python scripts/check_go2w_upgrade.py --learn-iterations 2
+  python scripts/check_go2w_upgrade.py --device cuda:0
 """
 import argparse
 from dataclasses import asdict

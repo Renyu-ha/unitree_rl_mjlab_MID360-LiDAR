@@ -21,7 +21,7 @@
 
 支持机器人：**Go2、Go2W（轮腿训练）、A2、As2、G1（29DOF）、G1-23DOF、H1\_2、H2、R1**
 
-本分支适配截至 2026-10-23 的 mjlab 主线 `8bb2bc9e`，固定 MuJoCo / mujoco-warp **3.17.0**、Warp **1.18.0**。使用 `uv sync --locked` 安装；上游仍声明 3.16 依赖，本项目通过明确的 uv override 测试 3.17，不能使用旧版的 `pip install -e .` 安装流程。安装及 GPU 回归命令见 [安装说明](doc/setup_zh.md)。
+本分支 `feat/mjlab-main-conda-3-16` 对齐截至 2026-10-23 的 mjlab 最新主线 `8bb2bc9e`，使用上游声明的 MuJoCo / mujoco-warp **3.16.0**、Warp **1.18.0**。使用 **Conda + pip** 安装，核心版本通过 pip constraints 固定，安装及 GPU 回归命令见 [安装说明](doc/setup_zh.md)。
 
 ### Go2W 感知训练迁移
 
@@ -49,13 +49,14 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 --env.scene.num-envs=40
 
 ```bash
 # 克隆仓库（含 submodule）
-git clone --recurse-submodules -b feat/mjlab-latest-mujoco-warp-3-17 https://github.com/Renyu-ha/unitree_rl_mjlab_MID360-LiDAR.git
+git clone --recurse-submodules -b feat/mjlab-main-conda-3-16 https://github.com/Renyu-ha/unitree_rl_mjlab_MID360-LiDAR.git
 cd unitree_rl_mjlab_MID360-LiDAR
 
-# 创建独立 .venv 并安装锁定依赖；保留原来的训练环境
-python -m pip install 'uv>=0.13.5'
-uv sync --locked --python 3.11 --extra cu126
-source .venv/bin/activate
+# 创建 Conda 环境，再安装 PyTorch 和项目依赖
+conda env create -f environment.yml
+conda activate unitree_mjlab_main
+python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cu126
+python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
 ```
 
 ---

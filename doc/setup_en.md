@@ -1,76 +1,50 @@
-# Installation Guide
+# Installation: mjlab Main with Conda
 
-## System Requirements
+Branch: `feat/mjlab-main-conda-3-16`. Upstream checked on 2026-10-23:
+mjlab commit `8bb2bc9e187797689ec82c78c35019afd2fd0376`, MuJoCo and
+mujoco-warp 3.16.0, Warp 1.18.0, RSL-RL 5.5.1 and PyTorch 2.14.1.
+These versions satisfy upstream dependency requirements. No dependency override
+or uv command is needed. The mjlab source reports package version 1.6.0;
+the Git commit identifies the exact main-branch source.
 
-- **Operating System**: Recommended Ubuntu 22.04 
-- **GPU**: Nvidia GPU  
-- **Driver Version**: Recommended version 550 or later  
-
----
-
-## 1. Creating a Virtual Environment
-
-It is recommended to run training or deployment programs in a virtual environment. Conda is recommended for creating virtual environments. If Conda is already installed on your system, you can skip step 1.1.
-
-### 1.1 Download and Install MiniConda
-
-MiniConda is a lightweight distribution of Conda, suitable for creating and managing virtual environments. Use the following commands to download and install:
+Use Ubuntu 22.04 and an NVIDIA GPU for training. The driver must support both
+Warp 1.18 and the chosen PyTorch CUDA package. CPU validation also works on
+Windows. Keep the previous training environment for old model dumps.
 
 ```bash
-mkdir -p ~/miniconda3
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
-bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-rm ~/miniconda3/miniconda.sh
+git clone --recurse-submodules -b feat/mjlab-main-conda-3-16 https://github.com/Renyu-ha/unitree_rl_mjlab_MID360-LiDAR.git
+cd unitree_rl_mjlab_MID360-LiDAR
+conda env create -f environment.yml
+conda activate unitree_mjlab_main
+python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cu126
+python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
+python -m pip check
 ```
 
-After installation, initialize Conda:
+For CPU validation, replace the PyTorch index with
+`https://download.pytorch.org/whl/cpu`. The constraints file pins the core
+validation versions, rather than every transitive package. The standard Git
+dependency in `pyproject.toml` pins mjlab for pip as well. Upstream's `uv_build`
+build backend is installed automatically by pip in an isolated build environment.
+
+Run the following on the training GPU before starting a long run:
 
 ```bash
-~/miniconda3/bin/conda init --all
-source ~/.bashrc
+python scripts/check_collision_regression.py --device cuda:0
+python scripts/check_go2w_upgrade.py --device cuda:0 --num-envs 2 --steps 64 --learn-iterations 2
+python -m unittest discover -s tests -v
 ```
 
-### 1.2 Create a New Environment
+Replace `cuda:0` with `cpu` for local CPU checks. These checks do not establish
+long-run training stability or multi-GPU correctness. See the
+[Chinese guide](setup_zh.md) for training, visualization, NaN capture and model
+compatibility details. The 3.17 comparison branch remains available as
+`feat/mjlab-latest-mujoco-warp-3-17`.
 
-Use the following command to create a virtual environment:
-
-```bash
-conda create -n unitree_rl_mjlab python=3.11
-```
-
-### 1.3 Activate the Virtual Environment
-
-```bash
-conda activate unitree_rl_mjlab
-```
-
----
-
-## 2. Installing
-
-### 2.1 Download the Project
-
-Clone the repository using Git:
-
-```bash
-git clone https://github.com/unitreerobotics/unitree_rl_mjlab.git
-```
-
-### 2.2 Install Dependencies
-
-```bash
-sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
-```
-
-All other dependencies are specified in the setup.py file.
-Navigate to the project root directory and install them with:
-
-```bash
-cd unitree_rl_mjlab
-pip install -e .
-```
-
-## Summary
-
-After completing the above steps, you are ready to run the related programs in the virtual environment. If you encounter any issues, refer to the official documentation of each component or check if the dependencies are installed correctly.
+The independent Conda CPU environment passed `pip check`, 50 tests, a 64-step
+Go2W perceptive rollout, two PPO iterations, checkpoint save/load, ONNX export
+and interactive playback. The normal training entry also passed with NaN guard,
+Viser and offline W&B logging. Go2W's five box collision geoms use zero margin
+for MuJoCo-Warp 3.16 native CCD support; wheel margins remain 1 mm. GPU and
+long-run stability still require validation on the training machine.
 

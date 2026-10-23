@@ -68,7 +68,8 @@
       <geom mesh="base_2" material="black" class="visual" />
       <geom mesh="base_3" material="white" class="visual" />
       <geom mesh="base_4" material="gray" class="visual" />
-      <geom name="base_link_collision0" size="0.1881 0.04675 0.057" type="box" class="collision" />
+      <!-- Warp 3.16 box-box CCD requires zero margin. Other shapes retain 1 mm. -->
+      <geom name="base_link_collision0" size="0.1881 0.04675 0.057" type="box" margin="0" class="collision" />
       <geom name="base_link_collision1" size="0.05 0.045" pos="0.285 0 0.01" type="cylinder" class="collision" />
       <geom name="base_link_collision2" size="0.047" pos="0.293 0 -0.06" class="collision" />
       <site name="imu" pos="-0.02557 0 0.04232" />
@@ -88,7 +89,7 @@
           <geom mesh="thigh_0" material="metal" class="visual" />
           <geom mesh="thigh_1" material="gray" class="visual" />
           <geom name="FL_thigh_collision" size="0.1065 0.01225 0.017" pos="0 0 -0.1065" quat="0.707107 0 0.707107 0"
-            type="box" class="collision" />
+            type="box" margin="0" class="collision" />
           <body name="FL_calf" pos="0 0 -0.213">
             <inertial pos="0.00629595 -0.000622121 -0.141417"
               quat="0.710672 0.00154099 -0.00450087 0.703508"
@@ -133,7 +134,7 @@
           <geom mesh="thigh_mirror_0" material="metal" class="visual" />
           <geom mesh="thigh_mirror_1" material="gray" class="visual" />
           <geom name="FR_thigh_collision" size="0.1065 0.01225 0.017" pos="0 0 -0.1065" quat="0.707107 0 0.707107 0"
-            type="box" class="collision" />
+            type="box" margin="0" class="collision" />
           <body name="FR_calf" pos="0 0 -0.213">
             <inertial pos="0.00629595 0.000622121 -0.141417"
               quat="0.703508 -0.00450087 0.00154099 0.710672"
@@ -176,7 +177,7 @@
           <geom mesh="thigh_0" material="metal" class="visual" />
           <geom mesh="thigh_1" material="gray" class="visual" />
           <geom name="RL_thigh_collision" size="0.1065 0.01225 0.017" pos="0 0 -0.1065" quat="0.707107 0 0.707107 0"
-            type="box" class="collision" />
+            type="box" margin="0" class="collision" />
           <body name="RL_calf" pos="0 0 -0.213">
             <inertial pos="0.00629595 -0.000622121 -0.141417"
               quat="0.710672 0.00154099 -0.00450087 0.703508"
@@ -222,7 +223,7 @@
           <geom mesh="thigh_mirror_0" material="metal" class="visual" />
           <geom mesh="thigh_mirror_1" material="gray" class="visual" />
           <geom name="RR_thigh_collision" size="0.1065 0.01225 0.017" pos="0 0 -0.1065" quat="0.707107 0 0.707107 0"
-            type="box" class="collision" />
+            type="box" margin="0" class="collision" />
           <body name="RR_calf" pos="0 0 -0.213">
             <inertial pos="0.00629595 0.000622121 -0.141417"
               quat="0.703508 -0.00450087 0.00154099 0.710672"

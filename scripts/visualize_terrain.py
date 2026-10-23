@@ -4,7 +4,7 @@ Displays a 10-row grid of terrains with increasing difficulty.
 Configurations and parameters are dynamically loaded from mjlab.terrains.config.
 
 Run with:
-  uv run src/mjlab/scripts/visualize_terrain.py
+  python scripts/visualize_terrain.py
 """
 
 from __future__ import annotations
