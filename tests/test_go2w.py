@@ -484,6 +484,9 @@ class Go2WTests(unittest.TestCase):
         for key in ("experiment_name", "run_name"):
           actual.pop(key)
           expected.pop(key)
+        symmetry = actual["algorithm"].pop("symmetry_cfg")
+        self.assertTrue(symmetry["use_data_augmentation"])
+        self.assertFalse(symmetry["use_mirror_loss"])
         self.assertEqual(actual, expected)
       for play in (False, True):
         with self.subTest(task=go2w_task, play=play):
@@ -493,6 +496,13 @@ class Go2WTests(unittest.TestCase):
           # TerrainEntityCfg creates a fresh bound loader for every instance.
           terrain.pop("spec_fn")
           reference_terrain.pop("spec_fn")
+          if terrain["terrain_generator"] is not None:
+            # Central platforms are independently configurable for Go2W.
+            stage = "v2" if "v2" in go2w_task else ("v1" if "v1" in go2w_task else "rough")
+            for name, width in go2w_env_cfgs.TERRAIN_PLATFORM_WIDTHS[stage].items():
+              sub_terrain = terrain["terrain_generator"]["sub_terrains"][name]
+              self.assertEqual(sub_terrain["platform_width"], width)
+              reference_terrain["terrain_generator"]["sub_terrains"][name]["platform_width"] = width
           self.assertEqual(terrain, reference_terrain)
           commands, reference = asdict(actual.commands["twist"]), asdict(expected.commands["twist"])
           commands.pop("viz")
@@ -503,6 +513,9 @@ class Go2WTests(unittest.TestCase):
             self.assertEqual(actual.observations[group].history_length, expected.observations[group].history_length)
             self.assertEqual(actual.observations[group].enable_corruption, expected.observations[group].enable_corruption)
             for term in expected.observations[group].terms:
+              if term in ("phase", "foot_air_time"):
+                self.assertNotIn(term, actual.observations[group].terms)
+                continue
               a, b = asdict(actual.observations[group].terms[term]), asdict(expected.observations[group].terms[term])
               a.pop("func")
               b.pop("func")

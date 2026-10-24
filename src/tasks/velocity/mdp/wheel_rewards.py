@@ -9,9 +9,45 @@ from typing import TYPE_CHECKING
 
 import torch
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.utils.lab_api.math import quat_apply
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
+
+
+def wheel_lateral_slide(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  body_cfg: SceneEntityCfg,
+  slip_deadband: float = 0.04,
+  contact_threshold: float = 1.0,
+) -> torch.Tensor:
+  """Penalize contact-wheel velocity along the horizontal wheel axle.
+
+  Adapt robot_lab's ``wheel_lateral_slide_switch``: local Y is the axle,
+  projected onto the world horizontal plane to exclude vertical motion.
+  Velocity is the wheel COM velocity, not a reconstructed contact-point
+  velocity. This is a horizontal slip proxy, not a terrain-tangent tire model.
+  Use the same current total-force contact gate and wheel ordering as
+  ``wheel_spin_contact``. A detached wheel incurs no cost.
+  """
+  if slip_deadband < 0.0 or contact_threshold < 0.0:
+    raise ValueError("slip_deadband and contact_threshold must be non-negative")
+  asset = env.scene[body_cfg.name]
+  velocity = asset.data.body_com_lin_vel_w[:, body_cfg.body_ids]
+  quat = asset.data.body_link_quat_w[:, body_cfg.body_ids]
+  force = env.scene[sensor_name].data.force
+  if force is None or force.shape != velocity.shape:
+    raise ValueError("Wheel-ground sensor must provide one net contact force per wheel")
+  axle_b = torch.zeros_like(velocity)
+  axle_b[..., 1] = 1.0
+  axle_w = quat_apply(quat, axle_b)
+  axle_w[..., 2] = 0.0
+  axle_w = axle_w / axle_w.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+  lateral_speed = (velocity * axle_w).sum(dim=-1).abs()
+  slip = (lateral_speed - slip_deadband).clamp_min(0.0)
+  contact = force.norm(dim=-1) > contact_threshold
+  return (slip * contact).sum(dim=-1)
 
 
 def wheel_spin_contact(

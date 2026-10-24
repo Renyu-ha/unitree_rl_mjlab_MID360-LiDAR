@@ -63,7 +63,7 @@ Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/uni
 | 奖励 | 姿态和关节位置限制只选腿关节；加入轮子停转与速度代价 |
 | 接触打滑 | 参考 `robot_lab.wheel_spin_contact` 的空转公式，以当前总接触力门控轮周速度与轮体 COM 平移速度的差值 |
 | 行走先验 | 移除四足固定腾空步态与强制足端抬高奖励，允许自主选择滚动和跨步 |
-| 地形 | 与对应 G1 阶段相同；v2 上行台阶 4–18 cm，精调上行楼梯占比 60% |
+| 地形 | 按对应 G1 阶段构建，中央平台尺寸可独立配置；v2 上行台阶 4–18 cm，精调上行楼梯占比 60% |
 | 感知 | 与 G1 相同：密集扫描居中，另设前移 0.35 m 的 MID360 扫描；稀疏化、丢帧、噪声、延迟和记忆按阶段对齐 |
 | 导出 | ONNX 附带每个动作的关节名称、位置/速度类型、缩放、偏置、控制周期和历史长度 |
 
@@ -79,7 +79,7 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 
 上面省略 `_joint` 后缀。这与 SDK 的电机顺序不同，实机适配必须使用导出的 `action_joint_names` 映射，不能直接把 16 维动作按索引发给 SDK。
 
-感知任务 Actor 单帧 242 维；Rough/v1 与 G1 一样使用 1 帧，v2/精调/Step14 使用 3 帧，即 **726 维**；Critic **269 维**；动作 **16 维**。mjlab 先展平每个观测项的历史再拼接各项，并非把三个完整帧直接拼在一起。平地任务移除高度图并使用 1 帧，Actor **55 维**、Critic **82 维**。Rough/v1 与 v2 不再能直接互相恢复 checkpoint；v2/精调/Step14 的张量形状兼容。Go2/G1 checkpoint 仍不能直接加载。
+当前 Go2W 已按实验要求注释 Actor/Critic 的 `phase`，同时注释 Critic 的 `foot_air_time`。感知任务 Actor 单帧 **240 维**；Rough/v1 使用1帧，v2/精调/Step14 使用3帧，即 **720 维**；Critic **263 维**；动作 **16 维**。mjlab 先展平每个观测项的历史再拼接各项，并非把三个完整帧直接拼在一起。平地任务移除高度图并使用1帧，Actor **53 维**、Critic **76 维**。Rough/v1 与 v2 不能直接互相恢复 checkpoint；v2/精调/Step14 的张量形状兼容。移除观测前的旧 v2 为726/269，不能直接加载到当前配置，应新开实验；Go2/G1 checkpoint 也不能直接加载。
 
 当前通用训练设置以本仓库自己的 G1 为基准，详细差异与保留项见 [G1 对齐记录](go2w_g1_alignment_zh.md)。机器人资产、轮足动作与 robot_lab 空转奖励继续使用 Go2W 配置；轮动作缩放保留 20 rad/s。旧 v2 checkpoint 虽保持张量形状兼容，动作处理、扫描布局及训练分布已变化，公平对照应创建新运行从头训练。
 
@@ -88,8 +88,10 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 - `src/assets/robots/unitree_go2w/go2w_constants.py`：模型、初始姿态、执行器、碰撞配置。
 - `src/tasks/velocity/config/go2w/env_cfgs.py`：场景、动作、观测、地形和感知课程。
 - `src/tasks/velocity/config/go2w/rl_cfg.py`：PPO 参数与日志目录。
-- `src/tasks/velocity/mdp/wheel_rewards.py`：滚动接触和停车奖励。
+- `src/tasks/velocity/mdp/wheel_rewards.py`：轮侧滑、接触空转和停车奖励。
+- `src/tasks/velocity/mdp/smoothness_rewards.py`：可选二阶动作与接触力变化代价，当前未配置。
 - `src/tasks/velocity/rl/go2w_runner.py`：混合动作 ONNX 元数据。
+- `src/tasks/velocity/rl/go2w_symmetry.py`：mjlab观测布局与RSL-RL TensorDict镜像增强。
 
 Go2W 配置直接从公共根层构建：环境以 `make_velocity_env_cfg()` 为起点，在 Go2W 模块内显式配置传感器、默认姿态约束、事件和终止条件；PPO 直接实例化 mjlab 的 `RslRlOnPolicyRunnerCfg`、`RslRlModelCfg`、`RslRlPpoAlgorithmCfg`。六个已注册任务均调用 Go2W 私有基础构建器，通过局部配置函数应用感知与地形阶段，不导入 Go2/G1 等其他机器人的 task 配置，也不串接已注册 task 的工厂函数。
 
@@ -107,7 +109,70 @@ reward_term = -0.15 * sum_i(contact_i * spin_i)
 
 沿用参考实现的 `0.8` 容差系数、`0.1 m/s` 死区和 `1 N` 阈值；阈值用于过滤微小接触力和数值波动。`R` 使用 Go2W 的 `0.086 m`，权重保留本次迁移初值 `-0.15`，并非照搬其他机器人的训练权重。原先的 `wheel_slip` 和几何接触点速度近似已移除。
 
-空转奖励直接使用普通 `ContactSensorCfg` 配置的 `feet_ground_contact`：`fields=("found", "force")`、`reduce="netforce"`、`num_slots=1`，保留逐轮接触时间跟踪。该总力包含法向反力和切向摩擦；摩擦力本身也由接触产生，只判断是否接触时无需分离法向力。因此无需独立的空转传感器或自定义接触适配器，接触观测、落地奖励与空转奖励共用同一份数据。对外接触状态、接触时间均为每轮一个值，力为每轮三维向量，Critic 维度不变。门控只读取当前力，不读取历史力。这一项衡量接触时的过度空转，不包含单独的侧滑惩罚。
+空转奖励直接使用普通 `ContactSensorCfg` 配置的 `feet_ground_contact`：`fields=("found", "force")`、`reduce="netforce"`、`num_slots=1`，保留逐轮接触时间跟踪。该总力包含法向反力和切向摩擦；摩擦力本身也由接触产生，只判断是否接触时无需分离法向力。因此无需独立的空转传感器或自定义接触适配器，接触观测、落地奖励、空转与侧滑奖励共用同一份数据。对外接触状态、接触时间均为每轮一个值，力为每轮三维向量，Critic 维度不变。门控只读取当前力，不读取历史力。空转项本身不包含侧滑，侧滑由下面的独立项处理。
+
+2026-10-24 新增 `wheel_lateral_slide`，所有 Go2W 阶段均启用，初始权重 `-0.1`。参考本地 robot_lab 的 `wheel_lateral_slide_switch`，保留轮子质心速度和轮轴水平投影的定义，接触门控使用上述共享总力。Go2W 的四个轮关节均绕局部 Y 轴旋转：
+
+```text
+axle_xy_i = normalize(project_xy(rotate(wheel_link_quaternion_i, [0, 1, 0])))
+slide_i = max(abs(dot(wheel_COM_velocity_i, axle_xy_i)) - 0.04 m/s, 0)
+reward_term = -0.1 * sum_i(contact_i * slide_i)
+```
+
+这是水平侧滑速度的 L1 代价，正常沿滚动方向前进不扣分。投影后不把竖直速度计为侧滑；投影长度用 `1e-6` 下限避免轮轴近乎竖直时除零。它不是按坡面法向建立的完整轮胎接触模型。初始权重未经过训练调优，需关注急转弯及原地转向的必要侧滑，不能直接套用 robot_lab 其他机器人的权重。
+
+另已实现两项可选代价，但**未向任何任务的 rewards 配置添加条目，包括零权重条目**：
+
+| 函数 | 定义 | 历史与重置 |
+| --- | --- | --- |
+| `action_smoothness_second_order` | `sum((a_t - 2*a_(t-1) + a_(t-2))**2)` | 使用 action manager 的原始动作历史；每个 episode 前两个控制步不计罚，合法的零动作照常参与后续计算 |
+| `grf_smoothness`（有状态类） | `w1*sum((F_t-F_(t-1))**2) + w2*sum((F_t-2*F_(t-1)+F_(t-2))**2)` | 默认 `w1=1`、`w2=0.5`，只取世界 Z 向；保存每个策略步的总接触力，按环境独立清空历史；首次采样不计罚、第二次只算一阶 |
+
+两项均为每控制步的离散差分，不除以 `dt`；若环境开启按 `dt` 缩放，总奖励仍由 reward manager 统一处理。动作项覆盖原始 16 维输出，不混用腿位置和轮速的物理单位。GRF 项要求世界系力（本项目的 `reduce="netforce"` 已满足）；与 robot_lab 的纯法向力输入有区别。默认只取世界 Z，避免直接约束平面牵引；不加接触门控，保留落地和离地的力变化。mjlab 的传感器 history 按物理子步更新，因此本实现自行保存策略步历史，不更改共享传感器的 `history_length`。
+
+### 2.1 左右镜像增强与关节代价实验
+
+参考本地 robot_lab 的 sagittal mirror 思路，具体接入按固定 mjlab 提交与 RSL-RL 5.5.1 源码实现：
+
+- `Go2WPpoAlgorithmCfg` 继承 mjlab 的 PPO 配置类，显式增加 `symmetry_cfg` dataclass 字段，使训练入口的 `asdict()` 保留配置；调用RSL-RL原生 `Symmetry`，`use_data_augmentation=True`、`use_mirror_loss=False`。未修改第三方依赖或 PPO 更新公式。
+- 每个mini-batch追加左右镜像样本，Actor/Critic同时增强；模拟环境数不变。根据mjlab observation manager解析后的条目顺序和维度生成镜像索引，逐项处理历史。地形图按实际ray pattern推导左右映射，覆盖密集与MID360记忆扫描的输入布局。
+- 交换 `FL↔FR`、`RL↔RR`；hip位置/速度/动作变号，thigh/calf保持符号。四个轮速度动作交换轮位、保持符号。线速度/重力/力向量的Y分量变号，角速度的X/Z分量变号，指令的侧向速度和偏航速度变号。
+- Critic接触力改用 `foot_contact_forces_b`：先将共享传感器的世界系总力转到机身系，再做原有 `sign(F)*log1p(abs(F))` 缩放。否则无法仅凭历史观测在任意世界航向下正确镜像。共享传感器及奖励仍读取原始世界系数据。
+- `phase` 在Actor/Critic中注释，`foot_air_time`在Critic中注释；G1和其他机器人保持原配置。`track_air_time=True`保留，用于soft_landing的首次触地判断。
+
+关节惩罚全部Go2W变体共用，腿与轮分开选择和赋权。力矩、腿速度及腿加速度初值参考本地 robot_lab 的Go2W配置；轮速保持本项目原值，轮加速度先使用较小初值，尚未做训练效果调优：
+
+| 项目 | 权重 | 作用对象与计算 |
+| --- | ---: | --- |
+| `leg_torques_l2` | −7.5e−6 | 12个腿执行器，累计实际 `actuator_force²` |
+| `wheel_torques_l2` | −5.0e−6 | 4个轮执行器，累计实际 `actuator_force²` |
+| `joint_vel_l2` | −5.0e−6 | 12个腿关节，累计实际角速度 `joint_vel²`；本轮新增 |
+| `wheel_speed` | −1.0e−4 | 4个轮关节，累计实际角速度 `joint_vel²`；保留已有项，不重复添加 |
+| `joint_acc_l2` | −2.5e−7 | 12个腿关节，累计实际角加速度 `joint_acc²`；保留已有项 |
+| `wheel_acc_l2` | −2.5e−8 | 4个轮关节，累计实际角加速度 `joint_acc²`；用户调整后的当前权重为腿项的1/10 |
+
+使用 mjlab 的内置 `joint_torques_l2`，选择字段为 **actuator_names/actuator_ids**，不是joint_names/joint_ids。Go2W当前采用单位gear的单关节传动，此时标量执行器输出可作为电机作用力矩。上述代价不是四腿力矩均衡项，也没有强制四腿同一时刻等力。此前slide继续启用，二阶action和GRF变化仍不加入配置。
+
+速度/加速度分别使用mjlab内置 `joint_vel_l2` / `joint_acc_l2`，通过 **joint_names/joint_ids** 读取MuJoCo的 `qvel` / `qacc`，单位分别为rad/s、rad/s²；这与原始策略动作的二阶差分不同。模型关节顺序中轮关节穿插在腿关节之间，不能用前12维/后4维切分实际关节状态。轮加速度的数值尺度可能较大，因此单独取较小初始权重，后续应根据分项回报与跟踪表现调整。
+
+验证：50项相关CPU检查通过，覆盖全部Go2W训练/play配置的腿/轮速度和加速度选择、物理量读取与隔离；另以2个实际V2平地环境采样4步并完成一轮PPO更新，Actor/Critic形状为720/263，增强批次翻倍，6项关节代价原始值及所有loss有限。这只验证接入、几何映射与数值流程，没有验证是否已消除右前腿悬空，也没有校准长期训练中的奖励比例。当前配置应新开训练，旧checkpoint输入层和归一化统计不适用。
+
+### 2.2 配置各地形的中央平台尺寸
+
+修改 `src/tasks/velocity/config/go2w/env_cfgs.py` 顶部的 `TERRAIN_PLATFORM_WIDTHS`。`rough`、`v1`、`v2` 可分别设置四类地形原生的 `platform_width`，单位为米，表示中央正方形平台的边长。例如只调整V2：
+
+```python
+"v2": {
+  "pyramid_stairs": 2.0,
+  "pyramid_stairs_inv": 2.0,
+  "hf_pyramid_slope": 2.0,
+  "hf_pyramid_slope_inv": 2.0,
+},
+```
+
+`v2`同时用于V2、StepUp、Step14，训练/play共用；Step14只有 `pyramid_stairs_inv` 启用。配置在阶段定制前写入，后续阶段保留这些值，不再用固定坡面平台宽度覆盖。修改后需重新启动训练/play进程。当前V2两类台阶的平台宽度均为2.0 m；该配置只作用于Go2W，不修改mjlab依赖中的全局预设。
+
+平地本身全平，随机粗糙和波浪地形没有原生中央平台，本次不新增平台。台阶按整级数量生成，实际中央平台边长可能略大于设置值；坡面平台边界受高度场网格分辨率影响。`platform_width` 与每块地形的 `size`、踏步宽度 `step_width`、整张地图外沿的 `border_width` 是不同参数。
 
 ## 3. 安装与训练
 

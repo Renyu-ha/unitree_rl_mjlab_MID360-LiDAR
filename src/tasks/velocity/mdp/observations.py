@@ -8,6 +8,7 @@ from mjlab.entity import Entity
 from mjlab.envs import mdp as envs_mdp
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactSensor
+from mjlab.utils.lab_api.math import quat_apply_inverse
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
@@ -43,6 +44,26 @@ def foot_contact_forces(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tenso
   assert sensor_data.force is not None
   forces_flat = sensor_data.force.flatten(start_dim=1)  # [B, N*3]
   return torch.sign(forces_flat) * torch.log1p(torch.abs(forces_flat))
+
+
+def foot_contact_forces_b(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Log-scaled wheel forces in the body frame, before any mirror operation.
+
+  The netforce sensor provides world-frame vectors. Rotating before log-scaling
+  makes sagittal reflection independent of the rollout's world yaw. The sensor
+  and all rewards continue to consume the original world-frame forces.
+  """
+  forces = env.scene[sensor_name].data.force
+  assert forces is not None
+  quat = env.scene[asset_cfg.name].data.root_link_quat_w.unsqueeze(1).expand(
+    -1, forces.shape[1], -1,
+  )
+  force_b = quat_apply_inverse(quat, forces).flatten(start_dim=1)
+  return torch.sign(force_b) * torch.log1p(force_b.abs())
 
 
 def phase(env: ManagerBasedRlEnv, period: float, command_name: str) -> torch.Tensor:

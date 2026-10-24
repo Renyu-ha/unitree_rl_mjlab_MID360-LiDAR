@@ -27,8 +27,6 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   WHEEL_GEOMS, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
 )
 from src.tasks.velocity import mdp
-from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
-from src.tasks.velocity.mdp.spawn_clearance import ensure_spawn_clearance
 from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
 
 SCAN = {
@@ -36,9 +34,47 @@ SCAN = {
   "x_offset_m": 0.35, "y_offset_m": 0.0,
 }
 
+# Central square platform side lengths in meters, shared by train and play.
+# V2 also applies to StepUp and Step14. Flat has no generated terrain;
+# random_rough and wave_terrain have no native platform_width parameter.
+TERRAIN_PLATFORM_WIDTHS = {
+  "rough": {
+    "pyramid_stairs": 3.0,
+    "pyramid_stairs_inv": 3.0,
+    "hf_pyramid_slope": 2.0,
+    "hf_pyramid_slope_inv": 2.0,
+  },
+  "v1": {
+    "pyramid_stairs": 3.0,
+    "pyramid_stairs_inv": 3.0,
+    "hf_pyramid_slope": 2.5,
+    "hf_pyramid_slope_inv": 2.5,
+  },
+  "v2": {
+    "pyramid_stairs": 2.0,
+    "pyramid_stairs_inv": 2.0,
+    "hf_pyramid_slope": 2.0,
+    "hf_pyramid_slope_inv": 2.0,
+  },
+}
+
 
 def _terrain_cfg(play: bool, stage: str):
   terrain = deepcopy(ROUGH_TERRAINS_CFG)
+  platform_stage = "rough" if stage in ("flat", "rough") else ("v1" if stage == "v1" else "v2")
+  platform_widths = TERRAIN_PLATFORM_WIDTHS[platform_stage]
+  terrain.sub_terrains["pyramid_stairs"] = replace(
+    terrain.sub_terrains["pyramid_stairs"], platform_width=platform_widths["pyramid_stairs"],
+  )
+  terrain.sub_terrains["pyramid_stairs_inv"] = replace(
+    terrain.sub_terrains["pyramid_stairs_inv"], platform_width=platform_widths["pyramid_stairs_inv"],
+  )
+  terrain.sub_terrains["hf_pyramid_slope"] = replace(
+    terrain.sub_terrains["hf_pyramid_slope"], platform_width=platform_widths["hf_pyramid_slope"],
+  )
+  terrain.sub_terrains["hf_pyramid_slope_inv"] = replace(
+    terrain.sub_terrains["hf_pyramid_slope_inv"], platform_width=platform_widths["hf_pyramid_slope_inv"],
+  )
   terrain.curriculum = not play
   if stage in ("flat", "rough"):
     if play:
@@ -68,13 +104,13 @@ def _terrain_cfg(play: bool, stage: str):
     terrain.sub_terrains["hf_pyramid_slope"],
     proportion=0.04 if stepup else (0.10 if v1 else 0.08),
     slope_range=(0.0, 0.35) if v1 else (0.0, 0.40),
-    platform_width=2.5 if v1 else 2.0, border_width=0.5,
+    border_width=0.5,
   )
   terrain.sub_terrains["hf_pyramid_slope_inv"] = replace(
     terrain.sub_terrains["hf_pyramid_slope_inv"],
     proportion=0.06 if stepup else (0.05 if v1 else 0.18),
     slope_range=(0.0, 0.30) if v1 else (0.0, 0.35),
-    platform_width=2.5 if v1 else 2.0, border_width=0.5,
+    border_width=0.5,
   )
   terrain.sub_terrains["random_rough"] = replace(
     terrain.sub_terrains["random_rough"], proportion=0.10 if stepup else (0.10 if v1 else 0.12),
@@ -175,7 +211,7 @@ def _make_go2w_env_cfg(
           func=mdp.projected_gravity, noise=Unoise(n_min=-gravity_noise, n_max=gravity_noise),
         ),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "twist"}),
-        "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
+        # "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
         "joint_pos": ObservationTermCfg(
           func=mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
           noise=Unoise(n_min=-pos_noise, n_max=pos_noise),
@@ -206,7 +242,7 @@ def _make_go2w_env_cfg(
           func=mdp.projected_gravity, noise=Unoise(n_min=-gravity_noise, n_max=gravity_noise),
         ),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "twist"}),
-        "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
+        # "phase": ObservationTermCfg(func=mdp.phase, params={"period": 0.6, "command_name": "twist"}),
         "joint_pos": ObservationTermCfg(
           func=mdp.joint_pos_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
           noise=Unoise(n_min=-pos_noise, n_max=pos_noise),
@@ -226,9 +262,9 @@ def _make_go2w_env_cfg(
         "foot_height": ObservationTermCfg(
           func=mdp.foot_height, params={"asset_cfg": SceneEntityCfg("robot", site_names=WHEEL_SITES)},
         ),
-        "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time, params={"sensor_name": "feet_ground_contact"}),
+        # "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time, params={"sensor_name": "feet_ground_contact"}),
         "foot_contact": ObservationTermCfg(func=mdp.foot_contact, params={"sensor_name": "feet_ground_contact"}),
-        "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces, params={"sensor_name": "feet_ground_contact"}),
+        "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces_b, params={"sensor_name": "feet_ground_contact"}),
         "wheel_vel": ObservationTermCfg(
           func=mdp.joint_vel_rel, params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
           noise=Unoise(n_min=-vel_noise, n_max=vel_noise), scale=0.05,
@@ -250,6 +286,17 @@ def _make_go2w_env_cfg(
   cfg.rewards["stand_still"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
   cfg.rewards["joint_pos_limits"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
   cfg.rewards["joint_acc_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+  cfg.rewards["joint_acc_l2"].weight = -2.5e-7
+  cfg.rewards["joint_vel_l2"] = RewardTermCfg(
+    func=mdp.joint_vel_l2, weight=-5.0e-6,
+    params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
+  )
+  # Wheel accelerations have a different scale from leg accelerations. Start
+  # conservatively; use physical joint_acc rather than policy-action differences.
+  cfg.rewards["wheel_acc_l2"] = RewardTermCfg(
+    func=mdp.joint_acc_l2, weight=-2.5e-8,
+    params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
+  )
   cfg.rewards["pose"].params["std_standing"] = {
     r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
     r".*(FR|FL|RR|RL)_thigh_joint.*": 0.1,
@@ -272,8 +319,26 @@ def _make_go2w_env_cfg(
   cfg.rewards.pop("foot_clearance")
   cfg.rewards.pop("foot_slip")
   cfg.rewards.pop("angular_momentum")
+  # Use actuator selections: mjlab's built-in torque cost reads actuator_force,
+  # not joint_ids. Go2W uses unit-gear scalar joint transmissions.
+  cfg.rewards["leg_torques_l2"] = RewardTermCfg(
+    func=mdp.joint_torques_l2, weight=-7.5e-6,
+    params={"asset_cfg": SceneEntityCfg("robot", actuator_names=r".*_(hip|thigh|calf)_joint.*")},
+  )
+  cfg.rewards["wheel_torques_l2"] = RewardTermCfg(
+    func=mdp.joint_torques_l2, weight=-5.0e-6,
+    params={"asset_cfg": SceneEntityCfg("robot", actuator_names=r".*_wheel_joint.*")},
+  )
+  cfg.rewards["wheel_lateral_slide"] = RewardTermCfg(
+    func=mdp.wheel_lateral_slide, weight=-0.1,
+    params={
+      "sensor_name": "feet_ground_contact",
+      "body_cfg": SceneEntityCfg("robot", body_names=WHEEL_BODIES),
+      "slip_deadband": 0.04, "contact_threshold": 1.0,
+    },
+  )
   cfg.rewards["wheel_spin_contact"] = RewardTermCfg(
-    func=wheel_spin_contact, weight=-0.15,
+    func=mdp.wheel_spin_contact, weight=-0.15,
     params={
       "sensor_name": "feet_ground_contact", "wheel_radius": WHEEL_RADIUS,
       "contact_threshold": 1.0,
@@ -282,7 +347,7 @@ def _make_go2w_env_cfg(
     },
   )
   cfg.rewards["wheel_stand_still"] = RewardTermCfg(
-    func=wheel_stand_still, weight=-0.02,
+    func=mdp.wheel_stand_still, weight=-0.02,
     params={"command_name": "twist", "asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
   )
   cfg.rewards["wheel_speed"] = RewardTermCfg(
@@ -358,7 +423,7 @@ def _make_go2w_env_cfg(
     relocation = cfg.events.pop("randomize_terrain")
     cfg.events = {"randomize_terrain": relocation, **cfg.events}
   cfg.events["ensure_spawn_clearance"] = EventTermCfg(
-    func=ensure_spawn_clearance, mode="reset", params={"clearance": 0.005},
+    func=mdp.ensure_spawn_clearance, mode="reset", params={"clearance": 0.005},
   )
   return cfg
 

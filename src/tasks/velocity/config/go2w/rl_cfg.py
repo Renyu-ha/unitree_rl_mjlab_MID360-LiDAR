@@ -1,6 +1,20 @@
-"""Go2W PPO configs built directly from mjlab's configuration primitives."""
+"""Go2W PPO configs extending mjlab's primitives with RSL-RL symmetry."""
+
+from dataclasses import dataclass, field
 
 from mjlab.rl import RslRlModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+
+
+@dataclass
+class Go2WPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+  # The pinned mjlab config does not expose this RSL-RL 5 option. Declare a
+  # dataclass field so scripts/train.py's asdict() retains it.
+  symmetry_cfg: dict = field(default_factory=lambda: {
+    "use_data_augmentation": True,
+    "use_mirror_loss": False,
+    "mirror_loss_coeff": 0.0,
+    "data_augmentation_func": "src.tasks.velocity.rl.go2w_symmetry:go2w_symmetry_augmentation",
+  })
 
 
 def unitree_go2w_ppo_runner_cfg(stage: str = "v2") -> RslRlOnPolicyRunnerCfg:
@@ -18,7 +32,7 @@ def unitree_go2w_ppo_runner_cfg(stage: str = "v2") -> RslRlOnPolicyRunnerCfg:
       activation="elu",
       obs_normalization=True,
     ),
-    algorithm=RslRlPpoAlgorithmCfg(
+    algorithm=Go2WPpoAlgorithmCfg(
       value_loss_coef=1.0,
       use_clipped_value_loss=True,
       clip_param=0.2,
