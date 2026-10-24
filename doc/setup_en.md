@@ -58,3 +58,47 @@ optional diagnostics, skips empty tendon fields and preserves the original
 physics error if optional reads or writes fail. GPU and long-run stability
 still require validation on the training machine.
 
+The pinned MuJoCo-Warp 3.5 source did not emit these two iteration-limit warnings;
+3.16 explicitly reports a budget reached before its stopping criteria are met.
+An old log without warnings therefore does not establish convergence, and a
+new limit warning does not by itself mean NaN.
+
+Shared velocity tasks now use solver/linesearch iteration budgets of 50/100
+instead of 10/20. Convergence tolerances, contact settings and overflow warnings
+remain unchanged; convergence still stops iterations early. On the full 10-by-6
+Go2W terrain, CPU checks with 32 environments and 256 Gaussian-action steps
+recorded 40,992 per-world physics calls per run, including reset forwards:
+
+| Action standard deviation | Old 10/20: linesearch / solver limits | New 50/100 |
+| --- | --- | --- |
+| 1 | 10 / 0 | 0 / 0 |
+| 2 | 5 / 1 | 0 / 0 |
+
+Replaying 15 captured states with 50/100 produced the same accelerations as a
+100/200 reference at the same tolerance. The captured solver-limit case needed
+11 iterations. Two small fixed-state fixtures now reproduce the original
+failures in the test suite; all 58 tests pass on CPU. The updated configuration
+also passes a 64-step rollout, two PPO iterations, checkpoint save/load and ONNX
+export in the plain-pip environment. These finite CPU checks
+do not establish convergence for every GPU state or an entire training run.
+Check the actual training device with:
+
+```bash
+python scripts/check_solver_convergence.py --device cuda:0 --num-envs 4096 --steps 256 --output logs/go2w_solver_check.json
+```
+
+This diagnostic checks real overflow bits after every reset/rollout physics
+call and exits nonzero on any limit or capacity overflow. Inspect environment
+construction / CUDA graph-capture messages separately. Per-call device reads
+synchronize execution, so diagnostic time is not training throughput. Add
+`--iterations 10 --ls-iterations 20` for an old-budget comparison or
+`--action-std 2` for larger perturbations. Changed budgets may require a first
+compilation of some solver kernels before the Warp cache is reused.
+
+The robot XML formerly declared global `cone="elliptic", impratio="100"`,
+conflicting with the scene's `pyramidal, 1`. These options apply to the entire
+scene, and attachment retains the parent values. The duplicate XML declaration
+is removed, leaving the task's `MujocoCfg` as the sole owner. Effective training
+values remain `pyramidal, 1`; standalone XML loading now also uses those defaults.
+See [MuJoCo option documentation](https://mujoco.readthedocs.io/en/stable/XMLreference.html#option).
+

@@ -17,7 +17,9 @@ import numpy as np
 from mjlab.actuator import BuiltinVelocityActuatorCfg
 from mjlab.entity import Entity
 from mjlab.sensor import ContactSensorCfg, GridPatternCfg
+from mjlab.scene import Scene
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
+from mjlab.utils.spec import non_default_option_fields
 
 import src.tasks  # noqa: F401 -- register repository tasks
 from src.assets.robots.unitree_go2w.go2w_constants import (
@@ -68,6 +70,22 @@ class Go2WTests(unittest.TestCase):
         np.testing.assert_array_equal(getattr(raw, field), getattr(loaded, field))
     self.assertEqual(loaded.nsensor, 3)
     self.assertEqual(GO2W_XML.read_bytes(), before)
+
+  def test_global_options_are_owned_by_the_task_without_attach_conflicts(self):
+    import warnings
+
+    self.assertEqual(non_default_option_fields(get_spec().option), [])
+    cfg = load_env_cfg("Unitree-Go2W-Flat")
+    with warnings.catch_warnings(record=True) as caught:
+      warnings.simplefilter("always")
+      scene = Scene(cfg.scene, device="cpu")
+      model = scene.spec.compile()
+    conflicts = [str(w.message) for w in caught if
+                 "Attach conflict" in str(w.message) or "non-default <option>" in str(w.message)]
+    self.assertEqual(conflicts, [])
+    cfg.sim.mujoco.apply(model)
+    self.assertEqual(model.opt.cone, mujoco.mjtCone.mjCONE_PYRAMIDAL)
+    self.assertEqual(model.opt.impratio, 1.0)
 
   def test_native_ccd_supports_robot_on_box_terrain(self):
     import mujoco_warp as mjw

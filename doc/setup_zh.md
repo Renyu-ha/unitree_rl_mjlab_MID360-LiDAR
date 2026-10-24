@@ -70,6 +70,54 @@ python -m unittest discover -s tests -v
 
 3.16 额外适配：MuJoCo-Warp 3.16 不支持 native CCD / MultiCCD 下非零 margin 的箱体-箱体碰撞。当前 Go2W 已进一步对齐 G1：所有非轮子碰撞体使用 `margin="0"`、`condim=1` 和基础滑动摩擦 `1`，轮子保留 1 mm margin 并使用 `condim=3, priority=1`。保留引擎默认的 native CCD 和 MultiCCD；具体接触调整见 [Go2W 模型来源](../src/assets/robots/unitree_go2w/SOURCE.md)。
 
+### 求解器收敛与全局参数冲突
+
+对比本机固定版本源码，旧 MuJoCo-Warp 3.5 没有这两类迭代上限告警，
+3.16 会在达到预算而未满足停止条件时设置诊断位并输出提示。因此，
+旧日志没有提示不能证明旧版从未耗尽预算；新版告警也不能直接等同于 NaN。
+
+共享速度任务的主求解器/线搜索预算从 `10/20` 调整为 `50/100`，对应
+`iterations` 和 `ls_iterations`。保持原来的收敛容差、接触模型、摩擦、
+奖励、观测和所有溢出警告。求解收敛后仍提前结束，预算不是每一步固定
+执行次数。Go2W 与对应 G1 任务继续使用相同的共享仿真设置。
+
+2026-10-24 在完整 10×6 地形、32 环境、256 步的 CPU 随机动作检查中，
+每种设置统计了 40,992 次逐环境物理调用（包括重置 forward）：
+
+| 动作标准差 | 原 10/20：线搜索/主求解器上限次数 | 新 50/100 |
+| --- | --- | --- |
+| 1 | 10 / 0 | 0 / 0 |
+| 2（扩大扰动） | 5 / 1 | 0 / 0 |
+
+共保存并回放 15 个触发状态；新预算的加速度与同容差的 `100/200`
+参考结果一致。触发主求解器上限的状态实际需要 11 次迭代，原 10 次
+预算截断了求解。这些结果支持当前修复，但 CPU 固定状态和有限随机
+测试不能保证任意 GPU 状态或整个训练过程都不再触及预算。
+修复后 58 项 CPU 测试、64 步完整任务检查、两次 PPO 迭代、checkpoint
+保存/加载及 ONNX 导出均通过；测试包含两种原始上限状态的回放。
+
+在实际训练 GPU 上检查，不需要 W&B 或启动 PPO：
+
+```bash
+python scripts/check_solver_convergence.py --device cuda:0 --num-envs 4096 --steps 256 --output logs/go2w_solver_check.json
+```
+
+脚本保留原始警告，逐次读取真实 `overflow` 位；出现任一求解上限或
+容量溢出时返回非零退出码。报告范围是环境构建后的 reset 和 rollout，
+构建时 CUDA graph capture 的提示仍应在终端检查。该检查会同步设备
+读取诊断数据，其耗时不能作为训练吞吐。`--iterations 10 --ls-iterations 20`
+可用于同设备对照；`--action-std 2` 可扩大动作扰动。本次预算改变可能
+让首次运行重新编译部分求解内核，后续可复用 Warp 缓存。
+
+`cone/impratio Attach conflict` 的来源是机器人 XML 原声明
+`cone="elliptic", impratio="100"`，而场景使用 `pyramidal, 1`。
+`cone` 选择摩擦锥模型，`impratio` 控制切向与法向接触阻抗之比。
+这些是全场景参数，MuJoCo 挂接机器人时保留父场景值。已移除 XML 中
+这处重复全局声明，由任务的 `MujocoCfg` 统一管理；训练实际使用的
+`pyramidal, 1` 不变。单独加载 XML 时也将使用默认的 `pyramidal, 1`。
+
+参数含义参见 [MuJoCo option 文档](https://mujoco.readthedocs.io/en/stable/XMLreference.html#option)。
+
 ## 3. Go2W 训练和可视化
 
 GPU 回归检查通过后，先用少量环境试跑，再恢复 4096 环境：

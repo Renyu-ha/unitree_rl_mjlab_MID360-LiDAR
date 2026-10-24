@@ -10,6 +10,16 @@ For the wheel-contact experiment, the four named wheel collision meshes are repl
 
 `get_spec()` only loads the final XML using MuJoCo's native asset path resolution. Initial state, KP/KD, action scales/order, rewards, observations and PPO remain in the existing training configurations. Self collision stays enabled. The MID360 is represented by ray sensors; hardware payload mass/extrinsics still require calibration.
 
+The reference XML's global `<option cone="elliptic" impratio="100"/>` is removed.
+MuJoCo options belong to the entire scene, not to an attached robot. Training
+already used the task's `MujocoCfg` values (`pyramidal`, `impratio=1`), overriding
+the XML values; newer MuJoCo/mjlab now warn about that conflict. The task remains
+the single owner of these options. This also makes standalone XML loading use
+MuJoCo's default pyramidal cone and impedance ratio 1 instead of elliptic/100.
+Shared velocity tasks use solver/linesearch budgets 50/100 after fixed-state
+convergence regression checks; contact definitions and solver tolerance are
+unchanged by this numerical-budget adjustment.
+
 On 2026-10-24 the training collision profile was aligned with this repository's G1: non-wheel collision geoms use `condim=1, priority=0`, while the four wheels use `condim=3, priority=1`. This overrides the XML contact dimensions and priority in `get_go2w_robot_cfg()`, and allows randomized wheel friction below the terrain's friction to govern wheel-ground contacts. Non-wheel base sliding friction is set to `1` directly in the XML; wheel friction remains `0.8 0.02 0.01` before task randomization. Collision masks are retained.
 
 The mjlab-main / MuJoCo-Warp 3.16 branch initially set `margin="0"` on the five box collision geoms (the base and four thighs), because version 3.16 rejects box-box contacts with nonzero margin when native CCD or MultiCCD is enabled. On 2026-10-24 zero margin was extended to all non-wheel collision geoms, matching G1. The wheel defaults explicitly retain `margin="0.001"`. Native CCD and MultiCCD stay enabled at their engine defaults. Geometry dimensions and wheel tread shape are unchanged by the margin adjustment.

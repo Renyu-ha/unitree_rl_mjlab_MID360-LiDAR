@@ -2,7 +2,7 @@
 <mujoco model="go2">
   <compiler angle="radian" meshdir="assets" autolimits="true" />
 
-  <option cone="elliptic" impratio="100" />
+  <!-- Global simulation options are owned by the task's MujocoCfg. -->
 
   <default>
     <default class="go2">

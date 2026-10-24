@@ -461,8 +461,11 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
       njmax=1500,
       mujoco=MujocoCfg(
         timestep=0.005,
-        iterations=10,
-        ls_iterations=20,
+        # MuJoCo-Warp 3.16's iterative line search can exhaust the old 10/20
+        # training budget at contact transitions. Keep convergence tests and
+        # warnings enabled, with headroom for difficult worlds in a GPU batch.
+        iterations=50,
+        ls_iterations=100,
       ),
     ),
     decimation=4,
