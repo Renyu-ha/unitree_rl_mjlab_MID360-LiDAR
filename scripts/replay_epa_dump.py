@@ -7,34 +7,18 @@ only inside this diagnostic process and does not modify installed files.
 
 import argparse
 from collections import Counter
-from contextlib import contextmanager
 from importlib.metadata import version
 import json
 from pathlib import Path
 
 import mujoco
 import mujoco_warp as mjw
-from mujoco_warp._src import collision_convex
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 import warp as wp
 
 from mjlab.sim.randomization import expand_model_fields
-
-
-@contextmanager
-def temporary_epa_horizon(capacity):
-  """3.16 rigid collision allocation constant; not a public engine setting."""
-  if version("mujoco-warp") != "3.16.0":
-    raise RuntimeError("This diagnostic adapter is validated only for mujoco-warp 3.16.0")
-  if capacity < 1:
-    raise ValueError("EPA horizon capacity must be positive")
-  original = collision_convex.MJ_MAX_EPAHORIZON
-  collision_convex.MJ_MAX_EPAHORIZON = capacity
-  try:
-    yield
-  finally:
-    collision_convex.MJ_MAX_EPAHORIZON = original
+from src.utils.collision_probe import temporary_epa_horizon
 
 
 def _contact_sanity(model, wm, positions, contacts):

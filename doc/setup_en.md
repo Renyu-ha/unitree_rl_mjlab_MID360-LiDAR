@@ -156,8 +156,8 @@ snapshot's world 3569. Its GPU contact between the front-right wheel and box
 a recorded distance of only -0.0000188 m. Restoring the last finite input, saved
 controls, warmstart and randomized fields produces a valid wheel-side contact
 and finite results in both native MuJoCo and CPU Warp. Capacities 24/30/64 agree
-on CPU. The GPU contact error has not been reproduced locally, so neither its
-internal cause nor a fix through horizon capacity is established. Probe it on
+on CPU. The local machine has no CUDA driver, so neither the internal cause nor
+a fix through horizon capacity is established. Probe it on
 the training GPU with the MJB beside the NPZ:
 
 ```bash
@@ -172,4 +172,36 @@ Subsequent NaN captures also save the original device `failure_geom_xpos`,
 `failure_geom_xmat` and `failure_overflow` as optional extras; extraction failures
 still preserve the core archive.
 The verdict fix and recorded-input probe passed all 68 CPU tests.
+
+The user subsequently reproduced the exact bad contact before the solver on the
+original RTX 4090 with driver 580.173.02 and CUDA Toolkit 13.4/Driver 13.0. Both
+forward acceleration and step velocity become nonfinite. Reproduction needs no
+PPO, multiple worlds or training CUDA graph. This localizes the error to the
+GPU cylinder/box collision path but does not establish a compiler/driver defect.
+
+Keep the environment fixed and run two independent diagnostic controls:
+
+```bash
+python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
+  --recorded-inputs --device cuda:0 --epa-horizon 64 --collision-fma on \
+  --output logs/nan_replay/horizon64.json
+
+python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
+  --recorded-inputs --device cuda:0 --epa-horizon 24 --collision-fma off \
+  --output logs/nan_replay/fma_off.json
+```
+
+The original defaults are horizon 24 with FMA enabled. FMA contraction changes
+rounding; sensitivity to it is not proof that FMA or CUDA is defective. The probe
+sets and records `fuse_fp` on the actual dynamically built CCD kernel modules,
+not merely the source function's module. It rejects an experiment if no CCD
+kernel options were applied. All in-memory overrides are restored on exit,
+including exceptions; installed files, training defaults and warnings are unchanged.
+Judge contact sanity/position as well as finite forward/step outputs. Finite
+solver output with an implausible contact is not a fix. If 64 still fails while
+FMA-off restores both valid contacts and finite physics, investigate numerical
+sensitivity in collision formulas. If both fail, compare CUDA builds or drivers
+without changing the other versions. CPU checks do not replace these GPU tests.
+All 71 CPU tests passed, including real CCD option application and restoration
+after exceptions. Both CLI controls also completed against the uploaded NaN inputs on CPU.
 

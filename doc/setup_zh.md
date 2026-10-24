@@ -192,8 +192,7 @@ python scripts/replay_epa_dump.py <训练日志>/epa_capture/rank_0/epa_dump_lat
 恢复最后一次有限输入（006309）、原始控制量、warmstart 和随机化字段后，
 本机 CPU 的原生 MuJoCo 与 Warp 均生成轮边的接触点
 （约 `(-35.7330, -7.7287, -0.1600)`），计算保持有限；Warp 容量
-24/30/64 的结果相同。尚未在本机复现原 GPU 的错误接触位置，因此
-不能断言扩大 EPA 容量解决了这个 NaN，也不能确认 GPU 内部的具体根因。
+24/30/64 的结果相同。本机无 CUDA 驱动，不能断言扩大 EPA 容量解决了这个 NaN。
 
 在训练 GPU 上使用原始输入进行单环境核对：
 
@@ -209,6 +208,39 @@ MJB 与 NPZ 保持同目录。该模式默认选择最后一次操作前的输�
 `failure_geom_xmat` 和 `failure_overflow`，保存碰撞使用的原始变换和溢出位；
 这些附加字段提取失败仍不会丢失已经保存的核心转储。
 本次回放判定修复与原始输入检查通过全部 68 项 CPU 测试。
+
+用户随后在原 RTX 4090、580.173.02 驱动、CUDA Toolkit 13.4/Driver 13.0
+环境中成功复现：求解器前的接触点与原始 GPU 错误点完全一致，随后
+`forward qacc finite: False step qvel finite: False`。复现不需要 PPO、
+多环境或训练 CUDA Graph；具体错误已经缩小到右前轮与箱体的 GPU 碰撞路径，
+仍未确定是算法数值稳定性、编译器或驱动问题。
+
+保持环境不变，分别运行以下两组对照，每组只改变一个因素：
+
+```bash
+python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
+  --recorded-inputs --device cuda:0 --epa-horizon 64 --collision-fma on \
+  --output logs/nan_replay/horizon64.json
+
+python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
+  --recorded-inputs --device cuda:0 --epa-horizon 24 --collision-fma off \
+  --output logs/nan_replay/fma_off.json
+```
+
+原默认值为容量 24、FMA 开启。FMA 是浮点乘加融合；关闭它只用于检查
+碰撞计算对舍入路径的敏感性，并不能据此认定 FMA 本身或 CUDA 有缺陷。
+报告记录实际 CCD kernel 的 `fuse_fp` 选项，选项在动态生成的碰撞 kernel
+上设置，仅修改 `collision_gjk` 模块的编译选项不会达到这个目的。实际 kernel
+未应用选项时，检查会报错而非给出对照结论。进程结束或异常退出时恢复
+内存中的选项和容量，不改安装包、正常训练设置或警告开关。
+
+同时检查新的 `contacts_before_solver[].contact_sanity`、接触位置和
+`after_forward/after_step` 的有限性。仅不再产生 NaN、但接触点仍远离轮子，
+不能算修复。若 64 仍错而关闭 FMA 后接触和计算均恢复正常，说明该错误
+对碰撞编译中的浮点融合敏感，下一步检查具体数值公式；若两组都错，再做
+相同版本 Warp 的不同 CUDA 构建或驱动对照。本机 CPU 验证不能替代这两组 GPU 实测。
+对照开关、真实碰撞 kernel 的选项应用与异常退出恢复通过全部 71 项 CPU 测试，
+上传的 NaN 输入也分别完成 CPU 容量 64/FMA 开启及容量 24/FMA 关闭的命令行检查。
 
 ## 3. Go2W 训练和可视化
 

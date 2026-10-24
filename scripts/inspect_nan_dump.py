@@ -19,6 +19,7 @@ import numpy as np
 import warp as wp
 
 from mjlab.sim.randomization import expand_model_fields
+from src.utils.collision_probe import collision_fma_mode, temporary_epa_horizon
 
 
 def recorded_inputs(archive, state_key, dump_index):
@@ -61,6 +62,27 @@ def finite_summary(data, fields):
       "max_abs_finite": float(np.abs(values[finite]).max()) if finite.any() else None,
     }
   return result
+
+
+def contact_detail(model, geoms, position, distance, frame, centers):
+  """Report bad collision geometry separately from a later solver NaN."""
+  values = np.linalg.norm(centers[geoms] - position, axis=1)
+  normal = frame[0]
+  sane = bool(np.isfinite(position).all() and np.isfinite(distance)
+              and np.isfinite(frame).all()
+              and np.isclose(np.linalg.norm(normal), 1, atol=1e-3, rtol=0))
+  for geom, radius_distance in zip(geoms, values, strict=True):
+    if model.geom_type[geom] in (mujoco.mjtGeom.mjGEOM_PLANE, mujoco.mjtGeom.mjGEOM_HFIELD):
+      continue
+    sane &= bool(radius_distance <= model.geom_rbound[geom] + abs(distance) + .01)
+  return {
+    "geoms": [model.geom(int(g)).name for g in geoms],
+    "distance": float(distance) if np.isfinite(distance) else None,
+    "position": np.where(np.isfinite(position), position, None).tolist(),
+    "normal": np.where(np.isfinite(normal), normal, None).tolist(),
+    "distance_to_geom_centers_m": [float(value) if np.isfinite(value) else None for value in values],
+    "contact_sanity": bool(sane),
+  }
 
 
 def recorded_summary(archive):
@@ -127,6 +149,12 @@ def inspect(args):
     model_path = (args.dump.parent / recorded["model_file"] if recorded["model_file"] else
                   args.dump.with_name(args.dump.name.replace("nan_dump_", "model_")).with_suffix(".mjb"))
   model = mujoco.MjModel.from_binary_path(str(model_path))
+  epa_horizon = getattr(args, "epa_horizon", None)
+  collision_fma = getattr(args, "collision_fma", "default")
+  if (epa_horizon is not None or collision_fma != "default") and not use_recorded:
+    raise ValueError("Collision experiments require --recorded-inputs")
+  if model.nflex and (epa_horizon is not None or collision_fma != "default"):
+    raise ValueError("Collision experiments support rigid models only")
   if not np.isfinite(state).all():
     raise ValueError("Selected input state already contains NaN/Inf.")
   if args.wheel_margin is not None:
@@ -182,6 +210,7 @@ def inspect(args):
     "recorded_data": recorded,
     "wheel_margin_override": args.wheel_margin,
     "input_source": "recorded" if use_recorded else "synthetic_hold",
+    "collision_fma_requested": collision_fma,
     "restored_model_fields": sorted(model_fields),
     "note": ("Saved pre-operation inputs and randomized model fields, with the recorded solver. "
              "Geometry transforms are recomputed on the replay device; this is not an exact GPU checkpoint. "
@@ -197,7 +226,10 @@ def inspect(args):
   wp.init()
   print("Versions:", json.dumps(versions), flush=True)
   print("State:", key, "root XYZ:", native.qpos[:3].tolist(), flush=True)
-  with wp.ScopedDevice(args.device):
+  with wp.ScopedDevice(args.device), temporary_epa_horizon(epa_horizon) as capacity, collision_fma_mode(collision_fma) as kernels:
+    report["epa_horizon"] = capacity
+    report["cuda_toolkit"] = wp.get_cuda_toolkit_version()
+    report["cuda_driver"] = wp.get_cuda_driver_version()
     solvers = (mujoco.mjtSolver(model.opt.solver),) if use_recorded else (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_CG)
     for solver in solvers:
       model.opt.solver = solver
@@ -223,6 +255,7 @@ def inspect(args):
       geoms = wd.contact.geom.numpy()[:count].copy()
       distances = wd.contact.dist.numpy()[:count].copy()
       positions = wd.contact.pos.numpy()[:count].copy()
+      frames = wd.contact.frame.numpy()[:count].copy()
       centers = wd.geom_xpos.numpy()[0].copy()
       mjw.forward(wm, wd)
       wp.synchronize()
@@ -232,15 +265,8 @@ def inspect(args):
         "overflow_after_forward": wd.overflow.numpy().tolist(),
         "after_forward": finite_summary(wd, ("qpos", "qvel", "qacc", "qacc_smooth", "sensordata")),
         "nefc": int(wd.nefc.numpy()[0]),
-        "contacts_before_solver": [
-          {
-            "geoms": [model.geom(int(g)).name for g in geoms[i]],
-            "distance": float(distances[i]),
-            "position": positions[i].tolist(),
-            "distance_to_geom_centers_m": np.linalg.norm(centers[geoms[i]] - positions[i], axis=1).tolist(),
-          }
-          for i in range(count)
-        ],
+        "contacts_before_solver": [contact_detail(model, geoms[i], positions[i], distances[i], frames[i], centers)
+                                    for i in range(count)],
       }
       if use_recorded:
         # Probe step from the original input, not a warmstart changed by forward.
@@ -254,6 +280,9 @@ def inspect(args):
             "step qvel finite:", result["after_step"]["qvel"]["finite"], flush=True)
       for contact in result["contacts_before_solver"]:
         print(" ", json.dumps(contact), flush=True)
+    report["collision_kernels"] = list(kernels.values())
+    if collision_fma != "default" and not kernels:
+      raise RuntimeError("No CCD kernel options were applied; collision experiment is inconclusive")
   if args.output:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
@@ -268,6 +297,8 @@ if __name__ == "__main__":
   parser.add_argument("--device", default="cpu", help="Warp device, e.g. cpu or cuda:0")
   parser.add_argument("--frame", type=int, default=-1)
   parser.add_argument("--recorded-inputs", action="store_true", help="Restore original inputs, randomized model fields and solver; defaults to the last pre-operation frame.")
+  parser.add_argument("--epa-horizon", type=int, help="Diagnostic rigid CCD capacity override; does not change training defaults.")
+  parser.add_argument("--collision-fma", choices=("default", "on", "off"), default="default", help="Diagnostic FMA option on actual rigid CCD kernels; restored on exit.")
   parser.add_argument("--summary-only", action="store_true", help="Report original stored fields without replay or requiring an MJB.")
   parser.add_argument("--dump-index", type=int, default=0, help="Index among the environments stored in the dump.")
   parser.add_argument("--wheel-margin", type=float, help="Optional in-memory probe; does not change model/config files.")
