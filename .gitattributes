@@ -1,2 +1,0 @@
-# Unified diff context uses intentional single-space blank lines.
-scripts/upstream_collision_patches/*.patch text eol=lf -whitespace

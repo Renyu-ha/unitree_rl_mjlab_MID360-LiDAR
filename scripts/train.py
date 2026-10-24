@@ -1,17 +1,14 @@
 """Script to train RL agent with RSL-RL."""
 
-import hashlib
 import json
 import logging
 import os
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from importlib.metadata import version
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
-import mujoco_warp as mjw
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
@@ -25,8 +22,7 @@ from mjlab.utils.wrappers import VideoRecorder
 
 from src.utils.training_viewer import LiveTrainingViewer
 from src.utils.nan_capture import install_nan_capture
-from src.utils.epa_capture import install_epa_capture
-from src.utils.collision_probe import temporary_epa_horizon
+from src.utils.physics_backend import physics_backend_info
 
 
 @dataclass(frozen=True)
@@ -43,10 +39,6 @@ class TrainConfig:
   viewer_port: int = 8080
   viewer_fps: float = 15.0
   enable_nan_guard: bool = False
-  capture_epa: bool = False
-  """Save the first EPA collision overflow and stop this diagnostic run."""
-  epa_horizon: int | None = None
-  """Override EPA edge-buffer capacity before environment construction (3.16 only)."""
   torchrunx_log_dir: str | None = None
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 
@@ -58,25 +50,8 @@ class TrainConfig:
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
-  # Each worker must select the capacity before buffers and CUDA graphs exist.
-  # Keep it active through reset, rollout and close, restoring it even on error.
-  with temporary_epa_horizon(cfg.epa_horizon) as capacity:
-    source = Path(mjw.__file__).resolve()
-    collision_settings = {
-      "engine_source": str(source),
-      "collision_source_sha256": hashlib.sha256(
-        (source.parent / "_src/collision_gjk.py").read_bytes().replace(b"\r\n", b"\n")
-      ).hexdigest(),
-      "mujoco_warp": version("mujoco-warp"),
-      "warp_lang": version("warp-lang"),
-      "epa_horizon": capacity,
-      "epa_horizon_override": cfg.epa_horizon,
-    }
-    print(f"[INFO] Collision settings: {json.dumps(collision_settings)}", flush=True)
-    _run_train(task_id, cfg, log_dir, collision_settings)
-
-
-def _run_train(task_id: str, cfg: TrainConfig, log_dir: Path, collision_settings: dict) -> None:
+  collision_settings = physics_backend_info()
+  print(f"[INFO] Collision settings: {json.dumps(collision_settings)}", flush=True)
   cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
   if cuda_visible == "":
     device = "cpu"
@@ -132,9 +107,6 @@ def _run_train(task_id: str, cfg: TrainConfig, log_dir: Path, collision_settings
 
   try:
     install_nan_capture(env.sim)
-    if cfg.capture_epa:
-      install_epa_capture(env.sim, log_dir / "epa_capture" / f"rank_{rank}", task_id)
-      print("[INFO] EPA capture enabled; the first overflow will be saved and stop this run.")
     log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
     resume_path: Path | None = None

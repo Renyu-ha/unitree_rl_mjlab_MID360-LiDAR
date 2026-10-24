@@ -8,7 +8,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import src.tasks  # noqa: F401
-from scripts.check_spawn_clearance import (
+from tests.physics_helpers import (
   assign_all_patches, audit_spawn_clearance, collision_stats, make_coverage_cfg,
   native_penetration,
 )

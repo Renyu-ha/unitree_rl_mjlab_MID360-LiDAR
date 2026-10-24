@@ -91,8 +91,7 @@ class NanCaptureTests(unittest.TestCase):
     self.assertTrue(Path(self.directory.name, "model_latest.mjb").is_file())
     self.assertTrue(guard.dump_path.with_suffix(".json").is_file())
     args = SimpleNamespace(dump=guard.dump_path, model=None, device="cpu", frame=-1,
-                           summary_only=False, dump_index=0, wheel_margin=None,
-                           output=None, recorded_inputs=True)
+                           summary_only=False, dump_index=0, output=None)
     with contextlib.redirect_stdout(io.StringIO()):
       report = inspect(args)
     self.assertEqual(report["input_source"], "recorded")

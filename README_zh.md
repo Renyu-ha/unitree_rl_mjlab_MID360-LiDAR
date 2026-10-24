@@ -21,7 +21,7 @@ Mjlab 结合了 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 的成熟高�
 
 ## 📦 安装配置
 
-本升级分支 `feat/mjlab-main-conda-3-16` 对齐最新 mjlab 主线 `8bb2bc9e`，使用上游声明的 MuJoCo / mujoco-warp 3.16.0、Warp 1.18.0。激活 Python 环境后，只需 `pip install -e .`；核心版本已在项目依赖中固定，完整安装、碰撞回归和训练命令见 [安装说明](doc/setup_zh.md)。
+本分支固定 mjlab `8bb2bc9e`、MuJoCo 3.16.0、Warp 1.18.0，以及包含上游 #1771/#1796 修复的 MuJoCo-Warp **3.16.0.post1**（EPA 容量 **64**）。激活 Python 环境后只需 `pip install -e .`，正常训练自动使用固定后端。安装、续训与验证见 [安装说明](doc/setup_zh.md)。
 
 
 ## 🔁 流程概览

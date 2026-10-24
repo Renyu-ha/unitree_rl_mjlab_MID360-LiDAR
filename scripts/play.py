@@ -18,6 +18,8 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
+from src.utils.physics_backend import physics_backend_info
+
 
 @dataclass(frozen=True)
 class PlayConfig:
@@ -53,6 +55,8 @@ class PlayConfig:
 
 
 def run_play(task_id: str, cfg: PlayConfig):
+  backend = physics_backend_info()
+  print(f"[INFO] MuJoCo-Warp {backend['mujoco_warp']}, EPA horizon {backend['epa_horizon']}")
   configure_torch_backends()
 
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")

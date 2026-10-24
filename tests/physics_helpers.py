@@ -1,23 +1,13 @@
-"""Compare raw and protected resets across every terrain type and difficulty row.
+"""Collision/reset fixtures kept outside the training entry points."""
 
-Each height uses the same frozen joints, heading, XY and startup randomization.
-This is a reset/collision diagnostic, not a training throughput benchmark.
-"""
-
-import argparse
 from importlib.metadata import version
-import json
-from pathlib import Path
 
 import mujoco
 import mujoco_warp as mjw
 import numpy as np
 import torch
 import warp as wp
-from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
-
-import src.tasks  # noqa: F401
 
 
 def make_coverage_cfg(task, seed=42, samples=2):
@@ -35,7 +25,6 @@ def make_coverage_cfg(task, seed=42, samples=2):
   cfg.scene.num_envs = rows * len(names) * samples
   return cfg, rows, names
 
-
 def assign_all_patches(env, rows, names):
   terrain = env.scene.terrain
   ids = torch.arange(env.num_envs, device=env.device)
@@ -46,7 +35,6 @@ def assign_all_patches(env, rows, names):
     terrain.terrain_levels[:] = levels
     terrain.env_origins[:] = terrain.terrain_origins[levels, types]
   return types.cpu().numpy()
-
 
 def collision_stats(env):
   if str(env.device).startswith("cuda"):
@@ -76,7 +64,6 @@ def collision_stats(env):
     "finite": bool(np.isfinite(distances).all() and np.isfinite(contact.pos.numpy()[:count]).all()),
   }
 
-
 def native_penetration(env):
   """Independent float64 collision check for the current Go2W DR profile.
 
@@ -101,7 +88,6 @@ geometry DR here rather than compare against a native model with stale shapes.
           raise RuntimeError("Native collision reference returned a non-finite distance")
         result[world] = max(result[world], -float(contact.dist))
   return result
-
 
 def audit_spawn_clearance(env, rows, names, resets=2, nominal_heights=(.4, .5, .6)):
   types = assign_all_patches(env, rows, names)
@@ -162,33 +148,3 @@ def audit_spawn_clearance(env, rows, names, resets=2, nominal_heights=(.4, .5, .
           "note": "All configured terrain types and difficulty rows are covered. Each height uses "
                   "the same frozen reset. This tests placement, not later dynamic penetration. "
                   "No observed EPA at a raw reset does not establish the origin of a training EPA warning."}
-
-
-def main():
-  parser = argparse.ArgumentParser(description=__doc__)
-  parser.add_argument("--task", default="Unitree-Go2W-Perceptive-Rough-v2")
-  parser.add_argument("--device", default="cpu")
-  parser.add_argument("--samples", type=int, default=2)
-  parser.add_argument("--resets", type=int, default=2)
-  parser.add_argument("--seed", type=int, default=42)
-  parser.add_argument("--nominal-heights", type=float, nargs="+", default=[.4, .5, .6])
-  parser.add_argument("--output", type=Path, default=Path("logs/spawn_clearance_check.json"))
-  args = parser.parse_args()
-  if min(args.samples, args.resets) < 1 or not all(np.isfinite(h) and h > 0 for h in args.nominal_heights):
-    parser.error("samples, resets and finite nominal heights must be positive")
-  cfg, rows, names = make_coverage_cfg(args.task, args.seed, args.samples)
-  env = ManagerBasedRlEnv(cfg, device=args.device)
-  try:
-    report = audit_spawn_clearance(env, rows, names, args.resets, args.nominal_heights)
-    report["task"] = args.task
-  finally:
-    env.close()
-  args.output.parent.mkdir(parents=True, exist_ok=True)
-  args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
-  print(f"[SpawnCheck] passed={report['passed']}; report: {args.output}", flush=True)
-  if not report["passed"]:
-    raise SystemExit(1)
-
-
-if __name__ == "__main__":
-  main()

@@ -14,7 +14,8 @@ dependencies = [
   # Keep the validated core versions in standard metadata so plain pip
   # installs them without a constraints file or additional package indexes.
   "mujoco==3.16.0",
-  "mujoco-warp==3.16.0",
+  # 3.16.0.post1: upstream EPA fixes #1771/#1796 and fixed horizon 64.
+  "mujoco-warp @ git+https://github.com/Renyu-ha/mujoco_warp.git@6dea56edf221906310a90896e3ad913ad12459c3",
   "warp-lang==1.18.0",
   "rsl-rl-lib==5.5.1",
   "torch==2.14.1",

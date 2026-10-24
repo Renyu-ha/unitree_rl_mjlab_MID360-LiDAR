@@ -1,16 +1,11 @@
-"""Summarize recorded failures or probe a finite input state, without PPO.
+"""Inspect a NaN archive or replay its saved inputs with the fixed backend.
 
-Example:
-  python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_latest.npz
-
-The default replay probe uses synthetic finite hold targets. --recorded-inputs
-instead restores the saved control, warmstart and randomized model fields.
-Recorded failure arrays are reported separately from either replay.
+Keep the NPZ and its referenced MJB together. Replay restores the recorded
+controls, warmstart, randomization and solver; it does not run a policy.
 """
 
 import argparse
-import hashlib
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import version
 import json
 from pathlib import Path
 
@@ -20,7 +15,7 @@ import numpy as np
 import warp as wp
 
 from mjlab.sim.randomization import expand_model_fields
-from src.utils.collision_probe import collision_fma_mode, temporary_epa_horizon
+from src.utils.physics_backend import physics_backend_info
 
 
 def recorded_inputs(archive, state_key, dump_index):
@@ -129,168 +124,92 @@ def recorded_summary(archive):
 
 
 def inspect(args):
-  use_recorded = getattr(args, "recorded_inputs", False)
   with np.load(args.dump, allow_pickle=False) as archive:
     recorded = recorded_summary(archive)
     keys = sorted(key for key in archive.files if key.startswith("states_step_"))
-    # --recorded-inputs defaults to the last saved pre-operation frame.
-    key = keys[-2] if use_recorded and args.frame == -1 and keys[-1] == recorded["failure_state_key"] else keys[args.frame]
-    state = np.asarray(archive[key][args.dump_index])
-    inputs, model_fields = recorded_inputs(archive, key, args.dump_index) if use_recorded else ({}, {})
+    if not args.summary_only:
+      if not keys:
+        raise ValueError("Archive has no recorded physics states")
+      frame = args.frame
+      if frame == -1 and keys[-1] == recorded["failure_state_key"] and len(keys) > 1:
+        frame = -2
+      key = keys[frame]
+      if key != recorded["failure_state_key"]:
+        state = np.asarray(archive[key][args.dump_index])
+        inputs, model_fields = recorded_inputs(archive, key, args.dump_index)
   print("Recorded data:", json.dumps(recorded, indent=2), flush=True)
   if args.summary_only or key == recorded["failure_state_key"]:
     if args.output:
       args.output.parent.mkdir(parents=True, exist_ok=True)
       args.output.write_text(json.dumps(recorded, indent=2), encoding="utf-8")
-    if not args.summary_only:
-      print("Selected frame is the recorded failure. Use --frame=-2 for a synthetic pre-failure probe.")
     return recorded
-  model_path = args.model
-  if model_path is None:
-    model_path = (args.dump.parent / recorded["model_file"] if recorded["model_file"] else
-                  args.dump.with_name(args.dump.name.replace("nan_dump_", "model_")).with_suffix(".mjb"))
-  model = mujoco.MjModel.from_binary_path(str(model_path))
-  epa_horizon = getattr(args, "epa_horizon", None)
-  collision_fma = getattr(args, "collision_fma", "default")
-  if (epa_horizon is not None or collision_fma != "default") and not use_recorded:
-    raise ValueError("Collision experiments require --recorded-inputs")
-  if model.nflex and (epa_horizon is not None or collision_fma != "default"):
-    raise ValueError("Collision experiments support rigid models only")
   if not np.isfinite(state).all():
-    raise ValueError("Selected input state already contains NaN/Inf.")
-  if args.wheel_margin is not None:
-    if use_recorded:
-      raise ValueError("--wheel-margin changes the recorded model; use the synthetic probe for overrides")
-    for geom_id in range(model.ngeom):
-      name = model.geom(geom_id).name
-      if "wheel" in name and "collision" in name:
-        model.geom_margin[geom_id] = args.wheel_margin
+    raise ValueError("Selected input already contains NaN/Inf")
+  model_path = args.model or args.dump.parent / recorded["model_file"]
+  model = mujoco.MjModel.from_binary_path(str(model_path))
+  if model.nflex:
+    raise ValueError("Recorded-input replay currently supports rigid models only")
   for name, values in model_fields.items():
     getattr(model, name)[:] = values[0]
 
   native = mujoco.MjData(model)
   mujoco.mj_setState(model, native, state, mujoco.mjtState.mjSTATE_PHYSICS)
   mujoco.mj_fwdPosition(model, native)
-  if use_recorded:
-    restore_inputs(native, inputs)
-    control = inputs["ctrl"][0]
-  else:
-    # Synthetic hold targets are deliberately separate from original inputs.
-    control = np.zeros(model.nu)
-    for aid in range(model.nu):
-      if model.actuator_trntype[aid] != mujoco.mjtTrn.mjTRN_JOINT:
-        raise ValueError("This hold-control probe requires joint actuators.")
-      joint_id = model.actuator_trnid[aid, 0]
-      if model.actuator_biasprm[aid, 1] != 0:
-        control[aid] = native.qpos[model.jnt_qposadr[joint_id]]
-      else:
-        control[aid] = np.clip(native.qvel[model.jnt_dofadr[joint_id]], -20.0, 20.0)
-    native.ctrl[:] = control
+  restore_inputs(native, inputs)
   mujoco.mj_forward(model, native)
-  native_contacts = [
-    {
-      "geoms": [model.geom(int(contact.geom1)).name, model.geom(int(contact.geom2)).name],
-      "distance": float(contact.dist),
-      "position": contact.pos.tolist(),
-      "normal": contact.frame[:3].tolist(),
-    }
-    for contact in native.contact
-  ]
-  versions = {}
-  for package in ("mujoco", "mujoco-warp", "warp-lang", "mjlab"):
-    try:
-      versions[package] = version(package)
-    except PackageNotFoundError:
-      versions[package] = None
   report = {
-    "versions": versions,
-    "device": args.device,
-    "engine_source": str(Path(mjw.__file__).resolve()),
-    "collision_source_sha256": hashlib.sha256((Path(mjw.__file__).parent / "_src/collision_gjk.py").read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
-    "dump": str(args.dump.resolve()),
-    "model": str(model_path.resolve()),
-    "state_key": key,
-    "dump_index": args.dump_index,
-    "recorded_data": recorded,
-    "wheel_margin_override": args.wheel_margin,
-    "input_source": "recorded" if use_recorded else "synthetic_hold",
-    "collision_fma_requested": collision_fma,
-    "restored_model_fields": sorted(model_fields),
-    "note": ("Saved pre-operation inputs and randomized model fields, with the recorded solver. "
-             "Geometry transforms are recomputed on the replay device; this is not an exact GPU checkpoint. "
-             "A single-world probe may not reproduce a multi-world GPU failure." if use_recorded else
-             "Synthetic finite hold controls and zero warmstart; not the original training inputs or randomized world model. "
-             "Native and Warp contact-distance margin conventions can differ."),
+    **physics_backend_info(),
+    "versions": {name: version(name) for name in ("mujoco", "mujoco-warp", "warp-lang", "mjlab")},
+    "device": args.device, "dump": str(args.dump.resolve()), "model": str(model_path.resolve()),
+    "state_key": key, "dump_index": args.dump_index, "input_source": "recorded",
+    "recorded_data": recorded, "restored_model_fields": sorted(model_fields),
+    "note": "Saved inputs with the recorded solver, controls, warmstart and randomized model fields. "
+            "The fixed backend recomputes transforms on the replay device; this is not an exact GPU checkpoint.",
     "native": {
       "fields": finite_summary(native, ("qpos", "qvel", "qacc", "sensordata")),
-      "contacts": native_contacts,
+      "contacts": [{"geoms": [model.geom(int(c.geom1)).name, model.geom(int(c.geom2)).name],
+                    "distance": float(c.dist), "position": c.pos.tolist(), "normal": c.frame[:3].tolist()}
+                   for c in native.contact],
     },
     "warp": [],
   }
   wp.init()
-  print("Versions:", json.dumps(versions), flush=True)
-  print("State:", key, "root XYZ:", native.qpos[:3].tolist(), flush=True)
-  with wp.ScopedDevice(args.device), temporary_epa_horizon(epa_horizon) as capacity, collision_fma_mode(collision_fma) as kernels:
-    report["epa_horizon"] = capacity
-    report["cuda_toolkit"] = wp.get_cuda_toolkit_version()
-    report["cuda_driver"] = wp.get_cuda_driver_version()
-    solvers = (mujoco.mjtSolver(model.opt.solver),) if use_recorded else (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_CG)
-    for solver in solvers:
-      model.opt.solver = solver
-      wm = mjw.put_model(model)
-      wd = mjw.make_data(model, nworld=1, nconmax=128, njmax=2048)
-      wd.qpos.assign(native.qpos[None].astype(np.float32))
-      wd.qvel.assign(native.qvel[None].astype(np.float32))
-      if model.na:
-        wd.act.assign(native.act[None].astype(np.float32))
-      wd.ctrl.assign(control[None].astype(np.float32))
-      wd.qacc_warmstart.zero_()
-      if use_recorded:
-        expand_model_fields(wm, 1, model_fields)
-        for name, values in model_fields.items():
-          getattr(wm, name).assign(values)
-        restore_inputs(wd, inputs)
-      # Read contacts before running any constraint solver. This distinguishes
-      # a narrowphase error from a failure introduced during Newton solving.
-      mjw.fwd_position(wm, wd, factorize=False)
-      wp.synchronize()
-      overflow_before_solver = wd.overflow.numpy().tolist()
-      count = min(int(wd.nacon.numpy()[0]), wd.naconmax)
-      geoms = wd.contact.geom.numpy()[:count].copy()
-      distances = wd.contact.dist.numpy()[:count].copy()
-      positions = wd.contact.pos.numpy()[:count].copy()
-      frames = wd.contact.frame.numpy()[:count].copy()
-      centers = wd.geom_xpos.numpy()[0].copy()
-      mjw.forward(wm, wd)
-      wp.synchronize()
-      result = {
-        "solver": solver.name,
-        "overflow_before_solver": overflow_before_solver,
-        "overflow_after_forward": wd.overflow.numpy().tolist(),
-        "after_forward": finite_summary(wd, ("qpos", "qvel", "qacc", "qacc_smooth", "sensordata")),
-        "nefc": int(wd.nefc.numpy()[0]),
-        "contacts_before_solver": [contact_detail(model, geoms[i], positions[i], distances[i], frames[i], centers)
-                                    for i in range(count)],
-      }
-      if use_recorded:
-        # Probe step from the original input, not a warmstart changed by forward.
-        restore_inputs(wd, inputs)
-      mjw.step(wm, wd)
-      wp.synchronize()
-      result["after_step"] = finite_summary(wd, ("qpos", "qvel", "qacc", "sensordata"))
-      result["overflow_after_step"] = wd.overflow.numpy().tolist()
-      report["warp"].append(result)
-      print(solver.name, "forward qacc finite:", result["after_forward"]["qacc"]["finite"],
-            "step qvel finite:", result["after_step"]["qvel"]["finite"], flush=True)
-      for contact in result["contacts_before_solver"]:
-        print(" ", json.dumps(contact), flush=True)
-    report["collision_kernels"] = list(kernels.values())
-    if collision_fma != "default" and not kernels:
-      raise RuntimeError("No CCD kernel options were applied; collision experiment is inconclusive")
+  with wp.ScopedDevice(args.device):
+    wm = mjw.put_model(model)
+    wd = mjw.make_data(model, nworld=1, nconmax=128, njmax=2048)
+    expand_model_fields(wm, 1, model_fields)
+    for name, values in model_fields.items():
+      getattr(wm, name).assign(values)
+    restore_inputs(wd, inputs)
+    mjw.fwd_position(wm, wd, factorize=False)
+    wp.synchronize()
+    count = min(int(wd.nacon.numpy()[0]), wd.naconmax)
+    geoms = wd.contact.geom.numpy()[:count].copy()
+    distances = wd.contact.dist.numpy()[:count].copy()
+    positions = wd.contact.pos.numpy()[:count].copy()
+    frames = wd.contact.frame.numpy()[:count].copy()
+    centers = wd.geom_xpos.numpy()[0].copy()
+    result = {
+      "solver": mujoco.mjtSolver(model.opt.solver).name,
+      "overflow_before_solver": wd.overflow.numpy().tolist(),
+      "contacts_before_solver": [contact_detail(model, geoms[i], positions[i], distances[i], frames[i], centers)
+                                 for i in range(count)],
+    }
+    mjw.forward(wm, wd)
+    wp.synchronize()
+    result["after_forward"] = finite_summary(wd, ("qpos", "qvel", "qacc", "qacc_smooth", "sensordata"))
+    result["overflow_after_forward"] = wd.overflow.numpy().tolist()
+    result["nefc"] = int(wd.nefc.numpy()[0])
+    restore_inputs(wd, inputs)
+    mjw.step(wm, wd)
+    wp.synchronize()
+    result["after_step"] = finite_summary(wd, ("qpos", "qvel", "qacc", "sensordata"))
+    result["overflow_after_step"] = wd.overflow.numpy().tolist()
+    report["warp"].append(result)
+  print(json.dumps(report, indent=2, allow_nan=False), flush=True)
   if args.output:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
-    print("Report:", args.output.resolve(), flush=True)
   return report
 
 
@@ -298,13 +217,9 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("dump", type=Path)
   parser.add_argument("--model", type=Path)
-  parser.add_argument("--device", default="cpu", help="Warp device, e.g. cpu or cuda:0")
+  parser.add_argument("--device", default="cpu")
   parser.add_argument("--frame", type=int, default=-1)
-  parser.add_argument("--recorded-inputs", action="store_true", help="Restore original inputs, randomized model fields and solver; defaults to the last pre-operation frame.")
-  parser.add_argument("--epa-horizon", type=int, help="Diagnostic rigid CCD capacity override; does not change training defaults.")
-  parser.add_argument("--collision-fma", choices=("default", "on", "off"), default="default", help="Diagnostic FMA option on actual rigid CCD kernels; restored on exit.")
-  parser.add_argument("--summary-only", action="store_true", help="Report original stored fields without replay or requiring an MJB.")
-  parser.add_argument("--dump-index", type=int, default=0, help="Index among the environments stored in the dump.")
-  parser.add_argument("--wheel-margin", type=float, help="Optional in-memory probe; does not change model/config files.")
+  parser.add_argument("--summary-only", action="store_true")
+  parser.add_argument("--dump-index", type=int, default=0)
   parser.add_argument("--output", type=Path)
   inspect(parser.parse_args())

@@ -1,8 +1,8 @@
 # 仓库感知运控解析与 Go2W 训练迁移
 
-本分支对齐 mjlab 最新主线 `8bb2bc9e`，使用 MuJoCo / mujoco-warp 3.16.0、Warp 1.18.0、RSL-RL 5.5.1。安装采用 Conda + pip，具体步骤和核心版本约束见 [安装说明](setup_zh.md)。
+本分支固定 mjlab `8bb2bc9e`、MuJoCo 3.16.0、MuJoCo-Warp 3.16.0.post1（上游 #1771/#1796 修复及 EPA 容量 64）、Warp 1.18.0、RSL-RL 5.5.1。安装采用 Conda + pip，具体步骤和核心版本约束见 [安装说明](setup_zh.md)。
 
-3.16 的碰撞兼容调整仅将机身和四个大腿箱体的 `margin` 显式设为 0，满足该版本 native CCD / MultiCCD 的限制；轮子仍保留 1 mm margin。几何尺寸、控制参数和自碰撞保持原配置。
+所有非轮碰撞体使用零 margin，轮子保留 1 mm margin；非轮/轮子接触维度与优先级分别为 `1/0` 和 `3/1`。当前模型、控制、奖励及自碰撞设置不因本次仓库清理而改变。
 
 ## 1. 原仓库如何实现感知运控
 
@@ -111,16 +111,15 @@ reward_term = -0.15 * sum_i(contact_i * spin_i)
 
 ## 3. 安装与训练
 
-建议使用 Ubuntu、Python 3.11 和 NVIDIA CUDA 环境。先按 [Conda 安装说明](setup_zh.md) 创建环境并安装 PyTorch，再在仓库根目录执行：
+建议使用 Ubuntu、Python 3.11 和 NVIDIA CUDA 环境。按 [安装说明](setup_zh.md) 创建环境后，在仓库根目录执行：
 
 ```bash
-python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
+pip install -e .
 python scripts/list_envs.py
 python -m unittest discover -s tests -v
-python scripts/check_go2w_upgrade.py --device cuda:0 --num-envs 2 --steps 64 --learn-iterations 2
 ```
 
-升级检查脚本验证 reset、有限观测/奖励、部分重置、PPO 更新、checkpoint 保存/加载与 ONNX 导出，输出位于 `logs/upgrade_check/`。CPU 上将 `cuda:0` 改为 `cpu`。它不是训练收敛或过台阶成功率测试。
+固定后端通过依赖安装，不需要 PYTHONPATH、容量参数或手动补丁。出生净空、求解器收敛、NaN 转储和碰撞回归保留在 `tests/`。
 
 ### 推荐：直接训练 v2
 
@@ -135,7 +134,7 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 ### NaN 定位与 W&B 日志
 
-RSL-RL 的 `The observation group 'critic' ... contains NaN` 只指出组名，不能据此确定出错项，也不能仅从前一轮的平均奖励定位原因。mjlab 1.2.0 已支持逐项观测检查：Actor、Critic 分别设置 `nan_policy=error`、`nan_check_per_term=True`。这会在观测进入延迟/历史缓冲之前检查 NaN 和 Inf，并给出类似以下信息（这是人为注入 NaN 后验证的示例，不代表实际故障来源）：
+RSL-RL 的 `The observation group 'critic' ... contains NaN` 只指出组名，不能据此确定出错项，也不能仅从前一轮的平均奖励定位原因。当前 mjlab 支持逐项观测检查：Actor、Critic 分别设置 `nan_policy=error`、`nan_check_per_term=True`。这会在观测进入延迟/历史缓冲之前检查 NaN 和 Inf，并给出类似以下信息（这是人为注入 NaN 后验证的示例，不代表实际故障来源）：
 
 ```text
 NaN/Inf detected in observation 'critic/foot_contact_forces' for environments: [1]
@@ -148,7 +147,7 @@ NaN/Inf detected in observation 'critic/foot_contact_forces' for environments: [
 上传 W&B 前，在训练机 Conda 环境中安装依赖并登录。本分支已升级到 RSL-RL 5.5.1，W&B 跟随该 mjlab 主线的依赖声明，不再沿用旧 RSL-RL 5.0.1 的版本约束。更新仓库后执行：
 
 ```bash
-python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
+pip install -e .
 wandb login
 export WANDB_USERNAME='你的W&B用户名或团队名'
 export WANDB_MODE=online
@@ -326,38 +325,10 @@ ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图�
 
 按用户要求，当前全部 Go2W 任务已启用自碰撞：命名碰撞体 `contype=1, conaffinity=1`，可视网格仍禁碰撞，MuJoCo 的同刚体及直接父子连杆默认过滤保持开启。旧转储模型为 `1/0`，不会被修改。旧 ONNX 的接口兼容，但接触动力学不同，后续应使用开启自碰撞的配置重新训练或微调。
 
-## 4. 本次迁移的边界与验证
+## 4. 范围与验证
 
-本次实现目标是 Go2W 的训练、回放和策略导出。没有复用 G1 C++ 程序去驱动 Go2W，也没有创建 Go2W 实机控制程序。后续实机对接需要实现 SDK 电机映射、轮速度下发、与训练一致的前移网格和历史顺序、点云外参、完整位姿补偿及感知超时处理；当前模型也未加入实际 MID360 的负载质量。奖励参数和控制增益需要实训调整。
+当前提供 Go2W 的训练、回放和策略导出，保留六个 Go2W 任务及仓库其他机器人任务。Go2W 尚无实机控制程序；硬件对接需要 SDK 电机映射、轮速度下发、与训练一致的扫描网格和历史顺序、点云外参、完整位姿补偿及感知超时处理。模型尚未加入实际 MID360 负载质量。
 
-`tests/test_go2w.py` 提供无需 GPU 的模型与配置回归检查：关节/执行器模式、六个任务注册与阶段兼容、接触顺序、固定台阶、robot_lab 空转公式对齐、当前总接触力门控、停车制动和分环境高度图记忆重置。`scripts/smoke_go2w.py` 提供在目标 CUDA 机器上运行的仿真/PPO/导出检查。完整数千至数万迭代训练及真机性能需要在目标设备上另行评估。
+回归检查集中在 `tests/`，覆盖模型与执行器、任务注册、观测和动作接口、轮接触奖励、感知记忆、ONNX、出生/重置净空、冻结碰撞与求解器状态，以及完整任务的 NaN 注入和转储容错。阶段性的迁移、容量/FMA 扫描和后端矩阵脚本已删除。后端算法来源、训练保护和当前验证边界见 [安装说明](setup_zh.md)；历史试验可从 Git 历史查看。
 
-2026-10-22 本地验证结果（Windows、CPU、隔离 Python 环境）：
-
-- 13 项回归检查全部通过，包含配置独立性、任务工厂不串接、与 robot_lab 数值用例对齐、接触力阈值、多接触法向力求和及摩擦力排除；Go2W 完整 mjlab 实体可编译为 23 维 `qpos`、22 维 `qvel`、16 个执行器。
-- Flat 和感知 v2：各 2 个环境，完成重置、仿真步进、1 次 PPO 更新、checkpoint 和 ONNX 导出。实测 v2 观测形状为 Actor `(2, 726)`、Critic `(2, 269)`。
-- 固定 14 cm 台阶任务：加载 v2 checkpoint，在最终稀疏阶段完成步进和 1 次 PPO 更新；高度图记忆填充指标正常产生。
-- 正式 `scripts/train.py` 入口以 2 个环境、1 次迭代跑通配置解析、配置保存、训练及导出；随后通过该入口加载 v2 checkpoint，在 StepUp-Finetune 继续完成 1 次更新。
-- 当前机器无可用 NVIDIA CUDA 驱动，未进行 GPU 性能验证、完整收敛训练或真机测试。上述冒烟模型仅用于验证程序链路，不是可部署的训练成果。
-- 替换为 robot_lab 接触空转奖励后，重新通过 11 项回归检查，并在 2 个环境、最终稀疏感知阶段完成 8 步仿真、1 次 PPO 更新和 ONNX 校验；观测及动作维度保持兼容。
-- 移除 Go2 任务配置依赖后，逐项对比六个任务的训练环境、回放环境及 PPO 配置，共 18 组完整配置与修改前完全一致；另在 2 个环境、最终稀疏感知阶段加载已有 checkpoint，完成 8 步仿真、1 次 PPO 更新及 ONNX 校验。
-
-2026-10-23 参考资产对齐后的本地验证（Windows、CPU）：
-
-- 15 项回归检查通过，新增编译后初始 `qpos` 的逐关节校验，以及碰撞维度、优先级和可视网格禁碰撞检查；执行器的 KP/KD、力矩上限、armature 和 frictionloss 均检查实际编译值。
-- 对照固定参考提交逐项检查，17 个机体的变换、惯量和几何、17 份网格的 Git blob 哈希、16 个关节初值及执行器参数匹配。六个任务共 18 组对比确认，机器人资产以外的环境配置和 PPO 配置没有变化。
-- 正式 `scripts/train.py` 入口以 16 个环境完成 32 次 PPO 迭代，开启物理 NaN guard 和 Actor/Critic 逐项严格检查，全程未出现 NaN/Inf，checkpoint 与 ONNX 正常生成。使用当前默认 Newton 求解器，没有附加 CG 覆盖。
-- 最终稀疏感知阶段以 4 个环境完成 16 个控制步、1 次 PPO 更新和 ONNX 格式/动作元数据校验，观测维度仍为 Actor `(4, 726)`、Critic `(4, 269)`。
-- 历史法向力适配方案及显式配置改造后，19 项回归检查通过；当时新增配置无循环/推导式检查、多接触总力/法向力分离、反向接触坐标轴、逐轮接触时间和每轮单一打包后端传感器检查。六个任务的 18 组对比确认，除接触传感器与空转奖励的传感器引用外，其余配置一致。该自定义接触适配方案现已移除，改用上述普通 `netforce` 传感器。
-- 历史适配方案曾以 4 个环境执行 64 步随机动作，与同场景的原始 `netforce` 传感器对照：逐轮总力、接触数量、腾空/接触时间及首次接触事件一致，实测总力最大误差为 0 N；随后通过最终稀疏阶段的 16 步仿真、1 次 PPO 更新和 ONNX 校验。
-- 简化为普通 `feet_ground_contact` 总力门控后，当前 16 项回归检查全部通过，覆盖严格 `> 1 N` 阈值、任意方向总力及脱离后历史力不生效。最终稀疏阶段以 4 个 CPU 环境完成 16 步仿真、1 次 PPO 更新和 ONNX 校验，Actor/Critic 维度保持 `(4, 726)` / `(4, 269)`。
-- 加入训练实时查看后，19 项回归检查通过。2 个 CPU 环境在最终稀疏阶段完成 16 次画面同步，验证网页 HTTP 响应、训练环境切换、射线/指令及接触显示，关闭后端口释放；正式 `scripts/train.py --viewer=viser` 入口完成 1 次 PPO 更新并正常关闭服务。尚未在目标训练机验证 GPU 或多 GPU 可视化性能。
-- 验证严格 NaN 定位时，向环境 1 的接触力观测人为注入 NaN，实际报错准确包含 `critic/foot_contact_forces` 与 `[1]`；物理 `qpos/qvel` 仍有限。兼容 W&B 0.28.2 后，2 个 CPU 环境在开启物理 guard 和 Actor/Critic 逐项检查时完成 1 次 PPO 更新，W&B 离线运行写入指标、配置和 `.pt` checkpoint；19 项检查及依赖一致性检查通过。没有使用账号做云端上传测试，这些验证也不代表训练机第 234 轮 NaN 的根因已确认。
-- 补上实时查看的几何分组控制，并新增 `scripts/viz_nan.py` 回放入口后，CPU 实际场景验证了 G2 外观/G3 碰撞体开关和 16 步画面同步；用合成转储验证了原始环境编号映射、回放滑块、网页响应及服务关闭。当时尚未取得训练机环境 610 的实际转储，此项验证不代表已确认该故障由穿透导致。
-- 收到环境 610 的实际转储后，确认保存姿态位于平地与下侧外圈接缝；外圈识别、高亮、逐帧接触报告已用该文件验证。24 项检查通过，边界对照选项通过 2 个 CPU 环境的短训练/ONNX 校验，以及实际越界后触发 timeout、回到网格内部且观测有限的检查。GPU 原始 NaN 的算法根因仍未复现确认。
-- 新增 ONNX 交互播放并启用自碰撞后，28 项检查通过。用户提供的 726→16 策略通过元数据校验，单个 MJWarp CPU 环境完成 150 个控制步（3 s 仿真）并跨过 Y=-24 接缝，观测和策略输出有限，重置回到指定位置。默认站姿无自身接触；折叠腿部测试在开启 1/1 掩码时产生轮轮接触，切回 1/0 时消失。该短测试不代表完整训练稳定性或 GPU NaN 根因已确认。
-- 固定为最终 XML 后，32 项检查通过：模型加载不再增删接口，只读取 XML 与网格；无用传感器和 3 份未使用网格已从文件中删除。155 个编译物理/接口字段与原实现一致，14 份保留网格的内容与参考一致；32 个 CPU MuJoCo 步的状态及全部传感器输出逐值一致。2 个 MJWarp CPU 环境完成 32 步，观测仍为 `(2, 726)` / `(2, 269)` 且有限。六个任务的训练、回放及 PPO 配置共 18 组保持一致；旧 MJB 几何检查已支持清理无用网格后的编号变化，同时继续校验实际使用的网格内容。
-- 当前验证规模不能确认用户训练机的 GPU、大规模环境下第 19 轮 NaN 已解决，仍需在目标训练机复测。
-- 圆柱轮实验：38 项回归检查通过；新增四轮圆柱中心、半径、宽度、关节轴与质量惯量校验，以及轮子转动 17 个角度时平地接触高度不变的检查。与替换前的编译模型逐项比较，仅四个轮碰撞几何改变，机体力学、关节、执行器、接触参数、网格外观、site 和传感器一致。2 个 MJWarp CPU 环境在最终稀疏感知阶段完成 16 个控制步、1 次 PPO 更新及 ONNX 导出；尚未进行大规模 GPU 训练验证。
-- 按本仓库 G1 对齐通用训练设置后，六个任务的 PPO 和 12 组 train/play 环境对比通过；无裁剪实际探针确认动作 2 产生 40 rad/s 轮目标。单个 MJWarp CPU 环境完成 16 步、1 次 PPO 更新，以及 `action_clip=None` 的 ONNX 导出与推理。此次使用 `--logger tensorboard` 完成检查，本机 W&B 离线后台启动停住的检查已中止。
-- 四轮碰撞体缩窄为 45 mm 后，42 项回归检查通过，包含轮子转动时接触高度不变、默认站姿无自身接触及折叠腿部产生自碰撞。对比缩窄前编译模型的 454 个数组字段，仅四轮宽度和派生包围体变化，质量、惯量、关节、接触参数、外观与传感器一致。单个 MJWarp CPU 环境在最终稀疏阶段完成 16 个控制步、1 次 PPO 更新，以及 `action_clip=None` 的 ONNX 导出和推理，观测及策略输出有限；使用 TensorBoard 验证，未进行大规模 GPU 训练。
+本机 CPU 检查与短程 PPO 用于验证程序链路，不代表策略已经收敛或可以部署。原 4090 的冻结 NaN 输入已经验证组合修复保持接触和有限计算；目标设备的长期训练和实机效果仍需评估。
