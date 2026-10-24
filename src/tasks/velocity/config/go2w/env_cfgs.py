@@ -17,7 +17,7 @@ from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationT
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
-from mjlab.sensor import ContactMatch, GridPatternCfg, ObjRef, RayCastSensorCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg, GridPatternCfg, ObjRef, RayCastSensorCfg
 from mjlab.terrains.config import ROUGH_TERRAINS_CFG
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
@@ -192,16 +192,16 @@ def _make_go2w_env_cfg(
     secondary=ContactMatch(mode="body", pattern="terrain"),
     fields=("found", "force"), reduce="netforce", num_slots=1, track_air_time=True,
   )
-  nonfoot_ground_cfg = mdp.OrderedContactSensorCfg(
-    name="nonfoot_ground_touch", preserve_order=True,
+  nonfoot_ground_cfg = ContactSensorCfg(
+    name="nonfoot_ground_touch",
     primary=ContactMatch(
       mode="geom", entity="robot", pattern=r".*_collision\d*$", exclude=WHEEL_GEOMS,
     ),
     secondary=ContactMatch(mode="body", pattern="terrain"),
     fields=("found", "force"), reduce="none", num_slots=1, history_length=4,
   )
-  self_collision_cfg = mdp.OrderedContactSensorCfg(
-    name="self_collision", preserve_order=True,
+  self_collision_cfg = ContactSensorCfg(
+    name="self_collision",
     primary=ContactMatch(mode="subtree", pattern="base_link", entity="robot"),
     secondary=ContactMatch(mode="subtree", pattern="base_link", entity="robot"),
     fields=("found", "force"), reduce="none", num_slots=1, history_length=4,
@@ -236,6 +236,7 @@ def _make_go2w_env_cfg(
     ),
   }
   # ------------------------------ Observations ------------------------------
+  # Feature columns are part of the policy/mirror interface, so their order is explicit.
   ang_noise = 0.3 if v2 else (0.25 if perceptive else 0.2)
   gravity_noise = 0.08 if v2 else (0.06 if perceptive else 0.05)
   pos_noise = 0.015 if v2 else (0.012 if perceptive else 0.01)
@@ -331,16 +332,16 @@ def _make_go2w_env_cfg(
 
   # ------------------------------ Events / Randomization ------------------------------
   cfg.events["foot_friction"].params["asset_cfg"] = SceneEntityCfg(
-    "robot", geom_names=WHEEL_GEOMS, preserve_order=True,
+    "robot", geom_names=WHEEL_GEOMS,
   )
   cfg.events["encoder_bias"].params["asset_cfg"] = SceneEntityCfg(
-    "robot", joint_names=LEG_JOINTS, preserve_order=True,
+    "robot", joint_names=LEG_JOINTS,
   )
   cfg.events["base_com"].params["asset_cfg"] = SceneEntityCfg(
-    "robot", body_names=("base_link",), preserve_order=True,
+    "robot", body_names=("base_link",),
   )
   cfg.events["reset_robot_joints"].params["asset_cfg"] = SceneEntityCfg(
-    "robot", joint_names=LEG_JOINTS + WHEEL_JOINTS, preserve_order=True,
+    "robot", joint_names=LEG_JOINTS + WHEEL_JOINTS,
   )
   cfg.events["base_com"].params["ranges"] = {
     0: (-0.075, 0.075), 1: (-0.05, 0.05), 2: (-0.04, 0.04),
@@ -389,7 +390,7 @@ def _make_go2w_env_cfg(
   # ------------------------------ Terminations ------------------------------
   cfg.terminations["terrain_out_of_bounds"] = TerminationTermCfg(
     func=mdp.terrain_out_of_bounds, time_out=True,
-    params={"asset_cfg": SceneEntityCfg("robot", preserve_order=True), "distance_buffer": 3.0},
+    params={"asset_cfg": SceneEntityCfg("robot"), "distance_buffer": 3.0},
   )
 
   # ------------------------------ Curriculum ------------------------------
@@ -403,6 +404,16 @@ def _make_go2w_env_cfg(
     _configure_stepup_curriculum(cfg)
   if stage == "flat":
     cfg.curriculum.pop("terrain_levels", None)
+  if not play:
+    # Native curricula use step > threshold and run on reset. Seed the first
+    # command sample with stage zero, before the first curriculum update.
+    initial_velocity = cfg.curriculum["command_vel"].params["velocity_stages"][0]
+    twist.ranges = replace(
+      twist.ranges,
+      lin_vel_x=initial_velocity["lin_vel_x"],
+      lin_vel_y=initial_velocity["lin_vel_y"],
+      ang_vel_z=initial_velocity["ang_vel_z"],
+    )
 
   # ------------------------------ Viewer / Episode ------------------------------
   cfg.viewer.body_name = "base_link"
@@ -439,17 +450,17 @@ def _configure_rewards(
     # Body and default posture.
     "body_orientation_l2": RewardTermCfg(
       func=mdp.body_orientation_l2, weight=-0.7,
-      params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",), preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",))},
     ),
     "body_ang_vel": RewardTermCfg(
       func=mdp.body_angular_velocity_penalty,
       weight=-0.10 if v2 else (-0.08 if perceptive else -0.05),
-      params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",), preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",))},
     ),
     "pose": RewardTermCfg(
       func=mdp.variable_posture, weight=0.5,
       params={
-        "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True),
+        "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS),
         "command_name": "twist", "walking_threshold": 0.1, "running_threshold": 1.5,
         "std_standing": {
           r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
@@ -469,36 +480,37 @@ def _configure_rewards(
       },
     ),
 
-    # Leg joints: torques select actuators; velocities/accelerations select joints.
+    # Scalar reductions use native selection order. Defaults/limits use the same IDs.
+    # Torques select actuators; velocities/accelerations select joints.
     "leg_torques_l2": RewardTermCfg(
       func=mdp.joint_torques_l2, weight=-7.5e-6,
-      params={"asset_cfg": SceneEntityCfg("robot", actuator_names=LEG_ACTUATORS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", actuator_names=LEG_ACTUATORS)},
     ),
     "joint_vel_l2": RewardTermCfg(
       func=mdp.joint_vel_l2, weight=-5.0e-6,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
     "joint_acc_l2": RewardTermCfg(
       func=mdp.joint_acc_l2, weight=-2.5e-7,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
     "joint_pos_limits": RewardTermCfg(
       func=mdp.joint_pos_limits, weight=-10.0,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
 
     # Wheel joints. Physical joint_acc is distinct from action differences.
     "wheel_torques_l2": RewardTermCfg(
       func=mdp.joint_torques_l2, weight=-5.0e-6,
-      params={"asset_cfg": SceneEntityCfg("robot", actuator_names=WHEEL_ACTUATORS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", actuator_names=WHEEL_ACTUATORS)},
     ),
     "wheel_speed": RewardTermCfg(
       func=mdp.joint_vel_l2, weight=-1e-4,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
     ),
     "wheel_acc_l2": RewardTermCfg(
       func=mdp.joint_acc_l2, weight=-2.5e-8,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS, preserve_order=True)},
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
     ),
 
     # Policy actions.
@@ -507,6 +519,7 @@ def _configure_rewards(
     ),
 
     # Ground contact, rolling consistency and collisions.
+    # Per-wheel products must align body/joint values with the contact sensor columns.
     "wheel_lateral_slide": RewardTermCfg(
       func=mdp.wheel_lateral_slide, weight=-0.1,
       params={
@@ -538,11 +551,11 @@ def _configure_rewards(
     "stand_still": RewardTermCfg(
       func=mdp.stand_still, weight=-0.5 if perceptive else -1.0,
       params={"command_name": "twist", "command_threshold": 0.1,
-        "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
+        "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
     "wheel_stand_still": RewardTermCfg(
       func=mdp.wheel_stand_still, weight=-0.02,
-      params={"command_name": "twist", "asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS, preserve_order=True)},
+      params={"command_name": "twist", "asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
     ),
 
     # Failure termination (timeouts are excluded by is_terminated).

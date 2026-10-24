@@ -8,7 +8,7 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.sensor import ContactMatch
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import src.tasks
@@ -59,26 +59,51 @@ class Go2WOrderingTests(unittest.TestCase):
       self.assertEqual(names, expected)
 
   def test_posture_tolerances_follow_the_selected_joint_order(self):
-    selection = SceneEntityCfg("robot", joint_names=("FR_calf_joint", "FL_hip_joint"), preserve_order=True)
-    selection.resolve({"robot": self.asset})
     q = torch.zeros(1, 16)
-    calf, hip = selection.joint_ids
+    calf = self.asset.joint_names.index("FR_calf_joint")
+    hip = self.asset.joint_names.index("FL_hip_joint")
     q[0, calf], q[0, hip] = .4, .03
     asset = SimpleNamespace(find_joints=self.asset.find_joints,
       data=SimpleNamespace(default_joint_pos=torch.zeros_like(q), joint_pos=q))
     env = SimpleNamespace(scene={"robot": asset}, device="cpu",
       command_manager=SimpleNamespace(get_command=lambda _: torch.zeros(1, 3)))
     std = {r".*_hip_joint": .1, r".*_calf_joint": .5}
-    cfg = RewardTermCfg(func=variable_posture, weight=1., params={
-      "asset_cfg": selection, "command_name": "twist",
-      "std_standing": std, "std_walking": std, "std_running": std,
-    })
-    reward = variable_posture(cfg, env)
-    torch.testing.assert_close(reward.std_standing, torch.tensor([.5, .1]))
-    expected = torch.exp(torch.tensor([-((.4 / .5) ** 2 + (.03 / .1) ** 2) / 2]))
-    torch.testing.assert_close(reward(env, **cfg.params), expected)
+    for preserve in (True, False):
+      with self.subTest(preserve=preserve):
+        selection = SceneEntityCfg("robot", joint_names=("FR_calf_joint", "FL_hip_joint"),
+                                   preserve_order=preserve)
+        selection.resolve({"robot": self.asset})
+        cfg = RewardTermCfg(func=variable_posture, weight=1., params={
+          "asset_cfg": selection, "command_name": "twist",
+          "std_standing": std, "std_walking": std, "std_running": std,
+        })
+        reward = variable_posture(cfg, env)
+        torch.testing.assert_close(reward.std_standing, torch.tensor([.5, .1] if preserve else [.1, .5]))
+        expected = torch.exp(torch.tensor([-((.4 / .5) ** 2 + (.03 / .1) ** 2) / 2]))
+        torch.testing.assert_close(reward(env, **cfg.params), expected)
 
-  def test_all_go2w_actions_sensors_and_explicit_entity_selections_preserve_order(self):
+  def test_reduced_joint_costs_are_invariant_to_selection_order(self):
+    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
+    values = torch.arange(32., dtype=torch.float32).reshape(2, 16) * .07
+    data = SimpleNamespace(joint_pos=values, default_joint_pos=values * .1,
+      joint_vel=values * 2., joint_acc=values * 3., actuator_force=values * 4.,
+      soft_joint_pos_limits=torch.stack((torch.full_like(values, -.5), torch.full_like(values, .5)), dim=-1))
+    env = SimpleNamespace(scene={"robot": SimpleNamespace(data=data)},
+      command_manager=SimpleNamespace(get_command=lambda _: torch.zeros(2, 3)))
+    for name in ("leg_torques_l2", "wheel_torques_l2", "joint_vel_l2", "joint_acc_l2",
+                 "joint_pos_limits", "wheel_speed", "wheel_acc_l2", "stand_still", "wheel_stand_still"):
+      with self.subTest(reward=name):
+        term = cfg.rewards[name]
+        selection = term.params["asset_cfg"]
+        selection.resolve({"robot": self.asset})
+        field = "actuator_names" if "torques" in name else "joint_names"
+        reverse = SceneEntityCfg("robot", **{field: tuple(reversed(getattr(selection, field)))},
+                                 preserve_order=True)
+        reverse.resolve({"robot": self.asset})
+        params = {**term.params, "asset_cfg": reverse}
+        torch.testing.assert_close(term.func(env, **term.params), term.func(env, **params))
+
+  def test_go2w_preserves_order_only_for_feature_columns_and_cross_wheel_pairs(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-"):
         continue
@@ -86,15 +111,24 @@ class Go2WOrderingTests(unittest.TestCase):
         cfg = load_env_cfg(task, play=play)
         with self.subTest(task=task, play=play):
           self.assertTrue(all(term.preserve_order for term in cfg.actions.values()))
-          self.assertTrue(all(sensor.preserve_order for sensor in cfg.scene.sensors
-            if isinstance(sensor, mdp.OrderedContactSensorCfg)))
-          groups = list(cfg.observations.values())
-          terms = [term for group in groups for term in group.terms.values()]
-          terms += list(cfg.rewards.values()) + list(cfg.events.values()) + list(cfg.terminations.values())
-          for term in terms:
+          for sensor in cfg.scene.sensors:
+            if isinstance(sensor, ContactSensorCfg):
+              if sensor.name == "feet_ground_contact":
+                self.assertIsInstance(sensor, mdp.OrderedContactSensorCfg)
+                self.assertTrue(sensor.preserve_order)
+              else:
+                self.assertNotIsInstance(sensor, mdp.OrderedContactSensorCfg)
+          terms = [("observation", name, term) for group in cfg.observations.values()
+                   for name, term in group.terms.items()]
+          terms += [("reward", name, term) for name, term in cfg.rewards.items()]
+          terms += [("other", name, term) for group in (cfg.events, cfg.terminations, cfg.curriculum)
+                    for name, term in group.items()]
+          for scope, name, term in terms:
+            ordered = scope == "observation" or (
+              scope == "reward" and name in ("wheel_lateral_slide", "wheel_spin_contact"))
             for selection in term.params.values():
               if isinstance(selection, SceneEntityCfg):
-                self.assertTrue(selection.preserve_order, (task, selection))
+                self.assertEqual(selection.preserve_order, ordered, (task, scope, name, selection))
 
 
 if __name__ == "__main__":

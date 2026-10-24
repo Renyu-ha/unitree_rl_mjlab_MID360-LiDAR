@@ -17,14 +17,14 @@ from src.utils.border_inspection import find_terrain_border
 
 class TerrainBoundaryTests(unittest.TestCase):
   @staticmethod
-  def make_env(positions, *, plane=False):
+  def make_env(positions, *, plane=False, actual_columns=6):
     positions = torch.tensor(positions, dtype=torch.float32)
     generator = SimpleNamespace(num_rows=10, num_cols=6, size=(8.0, 8.0), border_width=10.0)
     class Scene(dict):
       terrain = SimpleNamespace(cfg=SimpleNamespace(
         terrain_type="plane" if plane else "generator",
         terrain_generator=None if plane else generator,
-      ))
+      ), terrain_origins=None if plane else torch.zeros(10, actual_columns, 3))
       # Deliberately different tile origins: bounds must use world positions.
       env_origins = positions.clone()
     return SimpleNamespace(num_envs=len(positions), device="cpu", scene=Scene(
@@ -64,6 +64,14 @@ class TerrainBoundaryTests(unittest.TestCase):
     result = terrain_out_of_bounds(env)
     self.assertEqual(result.dtype, torch.bool)
     self.assertEqual(result.tolist(), [False, False])
+
+  def test_curriculum_boundary_uses_generated_columns_instead_of_requested_columns(self):
+    # Seven terrain types produce seven columns although the preset requests six.
+    env = self.make_env([[0., 35., .4], [0., 35.01, .4], [0., -35.01, .4]], actual_columns=7)
+    self.assertEqual(terrain_out_of_bounds(env).tolist(), [False, True, True])
+    # A larger requested num_cols must not extend the boundary beyond the map.
+    env.scene.terrain.cfg.terrain_generator.num_cols = 20
+    self.assertEqual(terrain_out_of_bounds(env).tolist(), [False, True, True])
 
   def test_boundary_truncates_without_failure_reward_but_preserves_falls(self):
     cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")

@@ -28,8 +28,12 @@ def terrain_out_of_bounds(
     raise ValueError("terrain_out_of_bounds requires plane or generated terrain")
 
   generator = terrain.terrain_generator
-  half_x = generator.num_rows * generator.size[0] / 2.0 + generator.border_width
-  half_y = generator.num_cols * generator.size[1] / 2.0 + generator.border_width
+  # Curriculum generation uses one column per terrain type, ignoring num_cols.
+  # Read the generated grid rather than assuming the requested column count.
+  origins = env.scene.terrain.terrain_origins
+  assert origins is not None
+  half_x = origins.shape[0] * generator.size[0] / 2.0 + generator.border_width
+  half_y = origins.shape[1] * generator.size[1] / 2.0 + generator.border_width
   position = env.scene[asset_cfg.name].data.root_link_pos_w
   return (position[:, 0].abs() > half_x - distance_buffer) | (
     position[:, 1].abs() > half_y - distance_buffer

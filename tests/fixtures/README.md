@@ -4,8 +4,11 @@
 float32 inputs captured before an actual `forward` or `step` call in the complete
 `Unitree-Go2W-Perceptive-Rough-v2` task. They contain no recomputed failure output.
 
-The model is reconstructed from the repository task with seed 42 and its full
-10-by-6 terrain. The files include qpos, qvel, control, warmstart, applied forces,
+The model is reconstructed with seed 42 and ten difficulty rows. Curriculum
+generation creates seven terrain columns (one per terrain type), regardless of
+the preset's requested six columns. Frozen replay restores the original 3 m
+stair platforms and 1 mm wheel margins; current training uses 2 m platforms and
+zero wheel margins. The files include qpos, qvel, control, warmstart, applied forces,
 time and the nonempty per-world domain-randomized model fields. Empty tendon
 fields are intentionally omitted. The model has 23 qpos, 22 velocities, 16
 actuators and 446 geoms. No MJB or installed dependency file is required.

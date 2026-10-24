@@ -192,15 +192,39 @@ Go2W PPO配置统一指定 `wandb_project="go2w_mid360"`、`upload_model=False`�
 
 ### 2.4 显式固定关节与接触顺序
 
-Go2W六种任务的action、Actor/Critic观测、奖励、事件和终止中的显式选择器均设为 `preserve_order=True`。`LEG_JOINTS` 和 `WHEEL_JOINTS` 使用逐个列出的名称，腿按FL/FR/RL/RR及每腿hip/thigh/calf排列，轮按FL/FR/RL/RR排列。位置、速度、力矩、轮body、轮site与接触primary使用同一套对应顺序；权重和输入维度不变。
+Go2W只在逐列语义需要固定的地方设置 `preserve_order=True`：action、Actor/Critic关节观测和足高观测，以及需与轮接触通道配对的slide body和空转body/joint选择器。`LEG_JOINTS` 和 `WHEEL_JOINTS` 使用逐个列出的名称，腿按FL/FR/RL/RR及每腿hip/thigh/calf排列，轮按FL/FR/RL/RR排列。力矩、速度、加速度、限位、停车等标量求和奖励使用默认顺序；pose容差按解析出的关节名生成，也使用默认顺序。事件随机化/重置、单body奖励及 `terrain_out_of_bounds` 不指定保序。权重和输入维度不变。
 
-固定mjlab版本的原生关节action不传递该开关，原生接触传感器也不提供该字段，因此分别使用本地 `OrderedJointPositionActionCfg` / `OrderedJointVelocityActionCfg` 和 `OrderedContactSensorCfg`。这些适配只调整名字及其对应索引的解析顺序，执行和传感器数据提取沿用mjlab，不修改第三方依赖。配置继续通过 `mdp.xxx` 使用。
+固定mjlab版本的原生关节action不传递该开关，原生接触传感器也不提供该字段，因此action使用本地 `OrderedJointPositionActionCfg` / `OrderedJointVelocityActionCfg`，四轮地面接触使用 `OrderedContactSensorCfg`。非轮地面接触和自碰撞使用原生 `ContactSensorCfg`。这些适配只调整名字及其对应索引的解析顺序，执行和传感器数据提取沿用mjlab，不修改第三方依赖。配置继续通过 `mdp.xxx` 使用。
 
 action的 `build()` 创建本地子类；其 `_find_targets()` 先调用原生逻辑筛选有执行器的关节，再在 `preserve_order=True` 时按配置名称列表同步重排关节名与joint IDs。例如配置 `(FR_hip_joint, FL_hip_joint)`，即使模型中的FL在FR之前，得到的目标索引也会是 `[4, 0]`，第0维动作写入FR。缩放、默认姿态偏移、裁剪和目标写入仍使用原生实现。接触传感器的 `build()` 同样创建本地子类；其 `_resolve_primary_names()` 保留原生校验与排除规则后，按配置顺序返回primary名称。原生逻辑随后按该顺序创建传感器槽位，因此 `found`、`force` 和接触/离地时间具有一致的轮子顺序。`True` 遵循名称列表或正则表达式列表的顺序；只有一个匹配四轮的正则时，不会自动推导FL/FR/RL/RR，因此四轮使用显式名称列表。
 
 `variable_posture` 构造容差向量时同样遵守选择器顺序，避免重排后hip/thigh/calf容差与关节值错配。镜像增强除原有action检查外，还检查腿/轮观测、足高site和接触传感器实际primary顺序；与当前镜像约定不一致时直接报错。
 
 验证：74项相关CPU测试通过，覆盖反向名称列表下的位置/速度目标及其关节索引、排除规则后的接触排序、pose容差顺序、错误观测/接触排列的镜像拒绝、全地形净空和ONNX播放兼容性；2环境、4步采样的一轮PPO更新通过，Actor/Critic仍为720/263维。
+
+### 2.5 配置、顺序和镜像的完整核对
+
+检查覆盖Go2W全部6个任务、train/play和圆柱/mesh两种轮模型，共24种组合。真实环境中逐项核对选择器名称与joint/actuator/body/site/geom索引，并进行短步进；这24种组合使用平地隔离地形影响。生成地形另外覆盖7类地形、10个难度行的出生净空，以及完整V2地形上的PPO更新。
+
+本轮修正：
+
+- 首次指令采样：原生速度课程在reset时运行，判断为 `common_step_counter > stage["step"]`；首次reset计数为0，会跳过step=0的初始范围。Go2W现在在构建配置时将初始范围设为最终所选课程的首阶段，StepUp也使用自己的首阶段；后续切换条件与play指令保持各自原有设置。
+- 地图边界：课程地形实际按地形种类分列，不使用配置请求的 `num_cols`。边界函数现在读取实际 `terrain_origins` 网格尺寸，避免V2提前截断或Rough越过真实外沿才截断。
+- 求解器回归样本：冻结输入来自3 m台阶平台，测试曾误用当前训练的2 m平台重建。历史回放恢复3 m平台后，10/20预算的原告警可复现，50/100预算与100/200参考的加速度一致。当前训练平台继续采用用户配置。
+
+左右镜像核对结果：腿按FL↔FR、RL↔RR交换，hip取负、thigh/calf不变；轮速只交换左右。机身角速度取 `(-wx, wy, -wz)`，重力和线速度取 `(x, -y, z)`，指令取 `(vx, -vy, -wz)`。接触力先从世界系转到机身系，再作有符号log压缩；镜像时交换轮子并取 `(Fx, -Fy, Fz)`。高度图只翻Y，不翻前后X，且每一段term历史单独映射。
+
+`tests/test_go2w_mirror_runtime.py` 使用实际模型构造任意横滚、俯仰、偏航的镜像状态，核对原生动作写入MuJoCo控制槽的数值、增益/力矩范围/gear和软关节限位。接触标记写入真实编译的传感器地址，验证提取顺序和完整观测历史；两种轮模型下23种奖励都至少产生一次非零值，且镜像前后奖励相同。另覆盖感知记忆的丢帧、前向平移和过期。
+
+全量100项CPU测试通过。完整V2生成地形实际为10×7块，2环境、4步采样和小网络的一轮PPO更新通过；本地checkpoint和ONNX导出通过，ONNX参考执行结果与PyTorch最大误差约 `4.47e-8`，`upload_model=False`确实阻止模型上传。Actor/Critic维度仍为Flat 53/76、Rough/V1 240/263、V2及其派生任务720/263。
+
+已确认的设计限制：MID360记忆只沿前进X方向平移，没有倒退、横移和转弯的完整运动补偿；它仍满足左右镜像关系，但允许倒退的V2课程不能据此假设记忆地图在倒退时准确。当前action和本体观测未配置延迟；仅高度扫描配置延迟，V1的play仍保留0—1控制步，V2的play关闭延迟。CPU数值检查不代表GPU长期训练效果或奖励权重已达到最优。
+
+### 2.6 action独立验证及按用途保序
+
+`tests/test_go2w_actions_runtime.py` 额外覆盖2种轮模型×True/False×3类设置，共12种场景，每个场景含2个环境。关节查询故意打乱，并包含只控制部分关节的情况；覆盖当前0.5/20动作尺度、非同值默认姿态、逐环境encoder bias、按名称配置scale/offset/clip及执行器限力。验证基准直接从MuJoCo编译模型的joint transmissions建立关节到actuator映射，不依赖本地action返回的索引或 `Entity.find_*`。控制值符合手工计算，实际actuator_force符合原生PD公式和限力；把同一批关节命令转换为自然顺序后交给未修改的mjlab action，得到相同的控制值和力矩。本地action实现通过验证，无需改动。
+
+`tests/test_go2w_ordering.py` 验证求和类奖励在打乱选择顺序后数值不变，pose在True/False下都按关节名正确生成容差。配置测试只要求有逐列对应关系的选择器保序，防止再次把True扩展到全部选择器。收紧配置后，完整102项CPU测试通过，真实镜像状态下全部23类奖励与观测历史继续通过验证。
 
 ## 3. 安装与训练
 
@@ -323,9 +347,9 @@ wandb sync --sync-tensorboard \
 
 ### 地图边界重置与外圈检查
 
-Go2W 感知训练网格与 G1 一样为 10 行 × 6 列，每块 8 m × 8 m，因此内部网格边界为 X ±40 m、Y ±24 m。训练 `border_width=20`，普通 play 为 10；均生成四块顶面 z=0 的 BOX。旧 NaN 转储来自 border=10 的配置，仍按它配套的旧 MJB 回放。
+Go2W感知训练配置请求10行×6列，但mjlab课程模式实际按7类地形生成10行×7列，每块8 m×8 m，因此当前内部网格边界为X ±40 m、Y ±28 m。训练 `border_width=20`，普通play为10；均生成四块顶面z=0的BOX。play使用随机地形模式，实际列数遵循其配置；Step14单独使用1×1。旧NaN转储使用它配套的旧MJB回放，不能用当前配置反推旧地图边界。
 
-Go2W 保留用户要求的 `terrain_out_of_bounds`，按 IsaacLab 的逻辑将 border 计入整张地图，距地图最外沿保留 `distance_buffer=3.0` m。当前感知训练网格在 `abs(x) > 57` 或 `abs(y) > 41` 时重置；阈值随网格尺寸和 border 自动变化，跨内部接缝不会触发。Flat 无限平面不触发边界重置。该项明确配置 `time_out=True`，仅越界时为 `truncated`，不产生 `is_terminated` 惩罚；同一步若也翻倒，失败惩罚仍生效。原额外的 `illegal_contact` 提前终止已移除，终止机制对齐 G1 的 time_out/fell_over 后仅增加边界超时。终端和 W&B 可查看 `Episode_Termination/terrain_out_of_bounds`。`--inspect-border=True` 或 `--no-terminations=True` 仍会关闭自动终止，供受控检查使用。
+Go2W保留用户要求的 `terrain_out_of_bounds`，将border计入整张地图，距地图最外沿保留 `distance_buffer=3.0` m。当前感知训练网格在 `abs(x) > 57` 或 `abs(y) > 45` 时重置；阈值从实际生成网格和border计算，跨内部接缝不会触发。Flat无限平面不触发边界重置。该项明确配置 `time_out=True`，仅越界时为 `truncated`，不产生 `is_terminated` 惩罚；同一步若也翻倒，失败惩罚仍生效。原额外的 `illegal_contact` 提前终止已移除，终止机制对齐G1的time_out/fell_over后仅增加边界超时。终端和W&B可查看 `Episode_Termination/terrain_out_of_bounds`。`--inspect-border=True` 或 `--no-terminations=True` 仍会关闭自动终止，供受控检查使用。
 
 对实际 `nan_dump_20261023_115651.npz` 与配套模型的分析发现：环境 610 最后两帧机身 Y 从 -23.9999027 m 移到 -24.0025921 m，紧邻下侧外圈；最后两帧 CPU 重建中，左前轮同时接触内部平地 `terrain_2` 与下侧 border `terrain_781`。右前轮更早已接触该 border，100 帧中 CPU 重建的最负接触距离约 -20.45 mm。保存状态全部有限，最后一帧最大关节速度约 18.74 rad/s。它支持优先排查接缝，但不能单凭 CPU 接触重建确认原始 GPU NaN 的算法根因；转储没有保留异常后的加速度、GPU 接触记录或原始动作。
 

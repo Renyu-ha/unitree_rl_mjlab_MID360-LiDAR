@@ -521,6 +521,11 @@ class Go2WTests(unittest.TestCase):
           reference.pop("viz")
           self.assertEqual(commands.pop("rel_heading_envs"), 0.8)
           reference.pop("rel_heading_envs")
+          if not play:
+            initial = actual.curriculum["command_vel"].params["velocity_stages"][0]
+            for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_z"):
+              self.assertEqual(commands["ranges"][axis], initial[axis])
+              reference["ranges"][axis] = initial[axis]
           self.assertEqual(commands, reference)
           self.assertEqual(actual.decimation, expected.decimation)
           for group in ("actor", "critic"):
@@ -593,10 +598,13 @@ class Go2WTests(unittest.TestCase):
       ranges, weight = traces[0][step]
       reference, reference_weight = traces[1][step]
       self.assertEqual(weight, reference_weight)
-      self.assertEqual(ranges["lin_vel_y"], reference["lin_vel_y"])
-      self.assertEqual(ranges["ang_vel_z"], reference["ang_vel_z"])
-    # Native schedules apply only after their threshold, including step zero.
-    self.assertEqual(traces[0][0][0], traces[1][0][0])
+      if step > 0:
+        self.assertEqual(ranges["lin_vel_y"], reference["lin_vel_y"])
+        self.assertEqual(ranges["ang_vel_z"], reference["ang_vel_z"])
+    # Seed stage zero in the config; later native thresholds still use strict >.
+    self.assertEqual(traces[0][0][0]["lin_vel_x"], (-0.1, 0.45))
+    self.assertEqual(traces[0][0][0]["lin_vel_y"], (-0.05, 0.05))
+    self.assertEqual(traces[0][0][0]["ang_vel_z"], (-0.10, 0.10))
     self.assertEqual(traces[0][1][0]["lin_vel_x"], (-0.1, 0.45))
     self.assertEqual(traces[0][4000 * 24][0]["lin_vel_x"], (-0.1, 0.45))
     self.assertEqual(traces[0][4000 * 24 + 1][0]["lin_vel_x"], (-0.3, 0.65))

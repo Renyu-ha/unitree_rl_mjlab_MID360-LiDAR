@@ -29,6 +29,10 @@ class SolverConvergenceTests(unittest.TestCase):
     cfg.seed = 42
     cfg.scene.num_envs = 1
     cfg.scene.entities["robot"].spec_fn = historical_margin_spec
+    # Reconstruct the geometry that produced these frozen inputs. Current Go2W
+    # training uses independently tunable platforms, now 2 m instead of 3 m.
+    cfg.scene.terrain.terrain_generator.sub_terrains["pyramid_stairs"].platform_width = 3.0
+    cfg.scene.terrain.terrain_generator.sub_terrains["pyramid_stairs_inv"].platform_width = 3.0
     cls.env = ManagerBasedRlEnv(cfg, device="cpu")
     cls.env.reset()
 
