@@ -1,7 +1,8 @@
-"""Process-local collision experiments for the pinned diagnostic tools.
+"""Process-local EPA capacity selection and diagnostic collision controls.
 
-These contexts never change installed files or training defaults. FMA changes
-are applied to the actual dynamically built CCD kernel modules before launch;
+These contexts never change installed files or training defaults. Training can
+explicitly select an EPA capacity for each worker before environment creation.
+FMA overrides are applied to the actual dynamically built CCD kernel modules before launch;
 changing only collision_gjk's module options would not affect those kernels.
 """
 

@@ -250,3 +250,50 @@ should a reviewed source revision become the pinned production dependency,
 preserving `pip install -e .`. The tool does not promote candidates automatically
 or claim to resolve the separate EPA-capacity overflow snapshot.
 
+### Training with the tested combined copy and an explicit EPA capacity
+
+The original 4090 report `20261024_135019_915918` reproduced NaN and the far
+contact on baseline and 1796. With 1771 or both patches, contacts were retained,
+physics stayed finite and all three upstream GPU cases passed. The contact
+position still differed from native MuJoCo by 1.364 mm, exceeding the diagnostic
+tool's chosen 1 mm threshold. Overall remained `passed:false`, so GPU project
+regressions and the smoke run were not automatically executed. The user chose
+to proceed with a training trial while retaining this precision discrepancy.
+
+The patches do not increase EPA capacity. After updating the repository, reuse
+the tested `both` copy and select capacity 30 explicitly:
+
+```bash
+GO2W_PATCH_DIR="$PWD/logs/upstream_collision_check/20261024_135019_915918/both"
+GO2W_PATCH_CACHE="$PWD/logs/upstream_collision_check/20261024_135019_915918/warp_cache"
+
+PYTHONPATH="$GO2W_PATCH_DIR:$PWD" WARP_CACHE_PATH="$GO2W_PATCH_CACHE" \
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
+  --env.scene.num-envs=4096 --epa-horizon=30 --enable-nan-guard=True \
+  --env.sim.nan-guard.output-dir=logs/go2w_nan_dump_upstream_both_h30 \
+  --env.observations.actor.nan-policy=error \
+  --env.observations.critic.nan-policy=error \
+  --agent.run-name=v2_upstream_1771_1796_h30
+```
+
+Each worker selects capacity before environment creation, buffer allocation and
+CUDA graph capture, retaining it through reset, rollout and close. Restart the
+training process for the option to take effect. Startup `Collision settings`
+prints the actual engine path, collision-source checksum and `epa_horizon: 30`;
+these are also saved in the run's `params/collision.json` after checkpoint
+selection, so creating a new log directory cannot disturb default resume lookup.
+Omitting the option retains the engine's default 24. Installed files, FMA and
+overflow warnings are unchanged; installation remains `pip install -e .`.
+
+All 77 local CPU project tests passed, including actual EPA buffer allocation
+and restoration after a training error. The combined engine with capacity 30
+also passed the normal training entry with 32 worlds, two PPO iterations,
+checkpoint saving and resumed training. GPU capacity coverage remains to be observed.
+
+The previously captured EPA scene passed at 30/64/128 against the seven-contact
+256 reference on the original engine. That does not prove 30 covers subsequent
+combined-engine training states. Add `--capture-epa=True` to save and stop on
+the first overflow, then replay the new scene under the same combined copy.
+To resume, retain `--agent.resume=True` and specify `--agent.load-run` and
+`--agent.load-checkpoint` explicitly.
+

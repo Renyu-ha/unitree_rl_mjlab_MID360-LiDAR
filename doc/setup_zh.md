@@ -291,6 +291,53 @@ python scripts/check_upstream_collision_fix.py \
 
 ## 3. Go2W 训练和可视化
 
+### 使用上游组合副本及显式 EPA 容量试训
+
+原 4090 的 `20261024_135019_915918` 报告确认：原版和仅 #1796 仍有
+异常远接触与 NaN；仅 #1771 和组合版本均保持接触且计算有限，GPU 上的
+三项上游用例也均通过。但候选接触位置与原生 MuJoCo 相差 1.364 mm，超过
+诊断工具自设的 1 mm 门槛，因此报告总体仍为 `passed:false`，没有自动执行
+GPU 项目回归和短程训练。这不等于所有训练状态已经稳定；用户选择先使用
+组合版本试训，保留该精度差异供后续检查。
+
+两项补丁不改变 EPA 缓冲容量。试训时可沿用已生成的 `both` 副本，并通过
+训练入口的 `--epa-horizon=30` 显式扩大容量。此前 EPA 现场在原引擎的
+30/64/128 均与 256 的七个参考接触完全一致；30 是否覆盖组合版本的后续
+训练状态仍需观察。先更新仓库，再在训练环境执行：
+
+```bash
+GO2W_PATCH_DIR="$PWD/logs/upstream_collision_check/20261024_135019_915918/both"
+GO2W_PATCH_CACHE="$PWD/logs/upstream_collision_check/20261024_135019_915918/warp_cache"
+
+PYTHONPATH="$GO2W_PATCH_DIR:$PWD" WARP_CACHE_PATH="$GO2W_PATCH_CACHE" \
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
+  --env.scene.num-envs=4096 \
+  --epa-horizon=30 \
+  --enable-nan-guard=True \
+  --env.sim.nan-guard.output-dir=logs/go2w_nan_dump_upstream_both_h30 \
+  --env.observations.actor.nan-policy=error \
+  --env.observations.critic.nan-policy=error \
+  --agent.run-name=v2_upstream_1771_1796_h30
+```
+
+容量在每个训练进程创建环境、分配缓冲和捕获 CUDA Graph 前设置，贯穿
+reset、rollout 和关闭过程；须重启训练生效。启动的 `Collision settings`
+应显示 `both/mujoco_warp/__init__.py`、组合源码校验和
+`ffbdcace59a65834acdde2146b296dd8fcf60d25d80b7c84ac59de59396b2289`
+及 `"epa_horizon": 30`。对应记录保存在该次日志的 `params/collision.json`。
+不传此选项仍使用引擎原容量 24，安装包、警告开关与 FMA 设置不变，安装
+继续使用 `pip install -e .`。
+
+本机 CPU 验证通过 77 项项目测试，包含真实 EPA 缓冲容量与异常恢复检查；
+组合引擎加容量 30 已通过正常训练入口的 32 环境、两轮 PPO、checkpoint
+保存和恢复续训。CPU 结果不能替代训练机上对 30 容量的继续观察。
+
+若需在首次 EPA 溢出时保存并停止，额外增加 `--capture-epa=True`；如果 30
+仍溢出，应回放新的现场来选择容量。回放同样需要加载这个 `both` 副本。
+续训旧 checkpoint 时保留 `--agent.resume=True`，并显式指定
+`--agent.load-run` 和 `--agent.load-checkpoint`。碰撞设置记录在 checkpoint
+选择后才写入，避免新建日志目录干扰默认的旧运行选择。
+
 GPU 回归检查通过后，先用少量环境试跑，再恢复 4096 环境：
 
 ```bash
