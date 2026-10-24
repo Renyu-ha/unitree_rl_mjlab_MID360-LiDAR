@@ -12,10 +12,10 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg
 from mjlab.utils.lab_api.math import quat_from_euler_xyz
 
 import src.tasks  # noqa: F401 -- register tasks
-from src.tasks.velocity.mdp.smoothness_rewards import (
+from src.tasks.velocity.mdp.rewards.smoothness import (
   action_smoothness_second_order, grf_smoothness,
 )
-from src.tasks.velocity.mdp.wheel_rewards import wheel_lateral_slide
+from src.tasks.velocity.mdp.rewards.wheel import wheel_lateral_slide
 
 
 class WheelSlideTests(unittest.TestCase):

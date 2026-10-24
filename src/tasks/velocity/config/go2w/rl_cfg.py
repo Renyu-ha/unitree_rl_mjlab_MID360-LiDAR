@@ -52,4 +52,6 @@ def unitree_go2w_ppo_runner_cfg(stage: str = "v2") -> RslRlOnPolicyRunnerCfg:
     save_interval=100,
     num_steps_per_env=24,
     max_iterations=4000 if stage == "stepup" else (30001 if stage == "v2" else (15001 if stage == "v1" else 10001)),
+    wandb_project="go2w_mid360",
+    upload_model=False,
   )

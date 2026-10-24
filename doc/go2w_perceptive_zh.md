@@ -67,7 +67,7 @@ Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/uni
 | 感知 | 与 G1 相同：密集扫描居中，另设前移 0.35 m 的 MID360 扫描；稀疏化、丢帧、噪声、延迟和记忆按阶段对齐 |
 | 导出 | ONNX 附带每个动作的关节名称、位置/速度类型、缩放、偏置、控制周期和历史长度 |
 
-动作顺序由 mjlab 按模型自然关节顺序解析：
+动作顺序由Go2W显式名称列表和有序动作适配固定；当前与模型自然关节顺序筛选结果一致：
 
 ```text
 FL_hip, FL_thigh, FL_calf,
@@ -88,8 +88,12 @@ FL_wheel, FR_wheel, RL_wheel, RR_wheel
 - `src/assets/robots/unitree_go2w/go2w_constants.py`：模型、初始姿态、执行器、碰撞配置。
 - `src/tasks/velocity/config/go2w/env_cfgs.py`：场景、动作、观测、地形和感知课程。
 - `src/tasks/velocity/config/go2w/rl_cfg.py`：PPO 参数与日志目录。
-- `src/tasks/velocity/mdp/wheel_rewards.py`：轮侧滑、接触空转和停车奖励。
-- `src/tasks/velocity/mdp/smoothness_rewards.py`：可选二阶动作与接触力变化代价，当前未配置。
+- `src/tasks/velocity/mdp/rewards/locomotion.py`：跟踪、机身、姿态及足端奖励。
+- `src/tasks/velocity/mdp/rewards/wheel.py`：轮侧滑、接触空转和停车奖励。
+- `src/tasks/velocity/mdp/rewards/smoothness.py`：可选二阶动作与接触力变化代价，当前未配置。
+- `src/tasks/velocity/mdp/events.py`：重置与随机化事件；净空检查的边界计算、Warp核函数与缓冲区均封装在 `ensure_spawn_clearance` 类内。
+- `src/tasks/velocity/mdp/actions.py`：让关节action实际遵守 `preserve_order=True`，按名称同步重排目标和关节索引。
+- `src/tasks/velocity/mdp/sensors.py`：接触传感器按显式primary列表排序，保留原生匹配、排除和数据提取逻辑。
 - `src/tasks/velocity/rl/go2w_runner.py`：混合动作 ONNX 元数据。
 - `src/tasks/velocity/rl/go2w_symmetry.py`：mjlab观测布局与RSL-RL TensorDict镜像增强。
 
@@ -173,6 +177,30 @@ reward_term = -0.1 * sum_i(contact_i * slide_i)
 `v2`同时用于V2、StepUp、Step14，训练/play共用；Step14只有 `pyramid_stairs_inv` 启用。配置在阶段定制前写入，后续阶段保留这些值，不再用固定坡面平台宽度覆盖。修改后需重新启动训练/play进程。当前V2两类台阶的平台宽度均为2.0 m；该配置只作用于Go2W，不修改mjlab依赖中的全局预设。
 
 平地本身全平，随机粗糙和波浪地形没有原生中央平台，本次不新增平台。台阶按整级数量生成，实际中央平台边长可能略大于设置值；坡面平台边界受高度场网格分辨率影响。`platform_width` 与每块地形的 `size`、踏步宽度 `step_width`、整张地图外沿的 `border_width` 是不同参数。
+
+### 2.3 配置分区与用户参数同步
+
+`env_cfgs.py` 的公共构建器按 Simulation、Scene/Terrain、Sensors、Actions、Observations、Events/Randomization、Commands、Rewards、Terminations、Curriculum、Viewer/Episode 分区。地形、感知和课程辅助配置分别集中成块；奖励集中到 `_configure_rewards`，按跟踪、机身/姿态、腿关节、轮关节、动作、接触/碰撞、停车、失败终止及StepUp附加项分组，每项权重和参数放在同一处。StepUp课程函数只处理课程，奖励和play指令分别在对应分区配置。
+
+同步用户粘贴版本的设置：V2及其派生任务 `action_rate_l2=-0.02`，所有Go2W任务 `rel_heading_envs=0.8`；V2前后向指令课程的X范围依次为 `(-0.1,0.45)`、`(-0.3,0.65)`、`(-0.5,0.90)`、`(-0.5,1.10)`，切换控制步仍为0、4000×24、9000×24、16000×24。StepUp保留自己的前向精调课程。
+
+Go2W PPO配置统一指定 `wandb_project="go2w_mid360"`、`upload_model=False`。日志沿用mjlab默认的W&B后端；模型仍保存到本地，停止上传模型文件到W&B。
+
+奖励实现统一收进 `mdp/rewards/`，由包导出到公共 `mdp`；配置仍用 `mdp.xxx`。`spawn_clearance.py` 更名为 `events.py`，净空事件相关常量、几何边界函数和Warp核函数都放在类内，保留 `required_lift` 和事件调用接口。重置顺序仍是先迁移地形、再重置机器人、最后保证出生净空。
+
+重构验证：以同步用户粘贴参数后的配置为基线，45个任务的训练/play参数及动作、观测、事件顺序逐项一致；奖励项的展示顺序按新分组排列。64项相关CPU测试通过，覆盖圆柱轮/mesh轮的全地形净空、局部重置、边界和指令；另以2环境、4步采样完成一轮PPO更新，全部loss有限。该验证不代表长期训练效果评估。
+
+### 2.4 显式固定关节与接触顺序
+
+Go2W六种任务的action、Actor/Critic观测、奖励、事件和终止中的显式选择器均设为 `preserve_order=True`。`LEG_JOINTS` 和 `WHEEL_JOINTS` 使用逐个列出的名称，腿按FL/FR/RL/RR及每腿hip/thigh/calf排列，轮按FL/FR/RL/RR排列。位置、速度、力矩、轮body、轮site与接触primary使用同一套对应顺序；权重和输入维度不变。
+
+固定mjlab版本的原生关节action不传递该开关，原生接触传感器也不提供该字段，因此分别使用本地 `OrderedJointPositionActionCfg` / `OrderedJointVelocityActionCfg` 和 `OrderedContactSensorCfg`。这些适配只调整名字及其对应索引的解析顺序，执行和传感器数据提取沿用mjlab，不修改第三方依赖。配置继续通过 `mdp.xxx` 使用。
+
+action的 `build()` 创建本地子类；其 `_find_targets()` 先调用原生逻辑筛选有执行器的关节，再在 `preserve_order=True` 时按配置名称列表同步重排关节名与joint IDs。例如配置 `(FR_hip_joint, FL_hip_joint)`，即使模型中的FL在FR之前，得到的目标索引也会是 `[4, 0]`，第0维动作写入FR。缩放、默认姿态偏移、裁剪和目标写入仍使用原生实现。接触传感器的 `build()` 同样创建本地子类；其 `_resolve_primary_names()` 保留原生校验与排除规则后，按配置顺序返回primary名称。原生逻辑随后按该顺序创建传感器槽位，因此 `found`、`force` 和接触/离地时间具有一致的轮子顺序。`True` 遵循名称列表或正则表达式列表的顺序；只有一个匹配四轮的正则时，不会自动推导FL/FR/RL/RR，因此四轮使用显式名称列表。
+
+`variable_posture` 构造容差向量时同样遵守选择器顺序，避免重排后hip/thigh/calf容差与关节值错配。镜像增强除原有action检查外，还检查腿/轮观测、足高site和接触传感器实际primary顺序；与当前镜像约定不一致时直接报错。
+
+验证：74项相关CPU测试通过，覆盖反向名称列表下的位置/速度目标及其关节索引、排除规则后的接触排序、pose容差顺序、错误观测/接触排列的镜像拒绝、全地形净空和ONNX播放兼容性；2环境、4步采样的一轮PPO更新通过，Actor/Critic仍为720/263维。
 
 ## 3. 安装与训练
 

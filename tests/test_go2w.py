@@ -28,7 +28,7 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg, get_spec,
 )
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
-from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
+from src.tasks.velocity.mdp.rewards.wheel import wheel_spin_contact, wheel_stand_still
 from src.tasks.velocity.config.go2w import env_cfgs as go2w_env_cfgs
 
 
@@ -414,8 +414,10 @@ class Go2WTests(unittest.TestCase):
   def test_wheel_contacts_bodies_and_joints_have_same_order(self):
     cfg = load_env_cfg("Unitree-Go2W-Rough")
     sensor = next(s for s in cfg.scene.sensors if s.name == "feet_ground_contact")
-    geoms = self.robot.find_geoms(sensor.primary.pattern)[1]
-    sites = cfg.observations["critic"].terms["foot_height"].params["asset_cfg"].site_names
+    geoms = sensor.build()._resolve_primary_names({"robot": self.robot}, sensor.primary)
+    site_selection = cfg.observations["critic"].terms["foot_height"].params["asset_cfg"]
+    site_selection.resolve({"robot": self.robot})
+    sites = site_selection.site_names
     self.assertEqual([name[:2] for name in geoms], list(sites))
     nonfoot = next(s for s in cfg.scene.sensors if s.name == "nonfoot_ground_touch")
     self.assertEqual(nonfoot.primary.exclude, sensor.primary.pattern)
@@ -423,17 +425,23 @@ class Go2WTests(unittest.TestCase):
     spin_sensor = next(s for s in cfg.scene.sensors if s.name == spin.params["sensor_name"])
     self.assertIs(spin_sensor, sensor)
     self.assertEqual([s.name for s in cfg.scene.sensors], ["terrain_scan", "feet_ground_contact", "nonfoot_ground_touch", "self_collision"])
-    self.assertIs(type(spin_sensor), ContactSensorCfg)
+    self.assertIsInstance(spin_sensor, ContactSensorCfg)
+    self.assertTrue(spin_sensor.preserve_order)
     self.assertEqual(spin_sensor.primary.pattern, sensor.primary.pattern)
     self.assertEqual(spin_sensor.reduce, "netforce")
     self.assertEqual(spin_sensor.num_slots, 1)
     self.assertFalse(spin_sensor.global_frame)
     self.assertTrue(spin_sensor.track_air_time)
     self.assertEqual(spin_sensor.fields, ("found", "force"))
-    bodies = self.robot.find_bodies(spin.params["body_cfg"].body_names)[1]
-    joints = self.robot.find_joints(spin.params["joint_cfg"].joint_names)[1]
+    spin.params["body_cfg"].resolve({"robot": self.robot})
+    spin.params["joint_cfg"].resolve({"robot": self.robot})
+    bodies = spin.params["body_cfg"].body_names
+    joints = spin.params["joint_cfg"].joint_names
     self.assertEqual([n[:2] for n in geoms], [n[:2] for n in bodies])
     self.assertEqual([n[:2] for n in geoms], [n[:2] for n in joints])
+    slide = cfg.rewards["wheel_lateral_slide"].params["body_cfg"]
+    slide.resolve({"robot": self.robot})
+    self.assertEqual(slide.body_names, bodies)
 
   def test_sparse_play_and_memory_are_independent(self):
     task = "Unitree-Go2W-Perceptive-Rough-v2"
@@ -484,6 +492,10 @@ class Go2WTests(unittest.TestCase):
         for key in ("experiment_name", "run_name"):
           actual.pop(key)
           expected.pop(key)
+        self.assertEqual(actual.pop("wandb_project"), "go2w_mid360")
+        self.assertFalse(actual.pop("upload_model"))
+        expected.pop("wandb_project")
+        expected.pop("upload_model")
         symmetry = actual["algorithm"].pop("symmetry_cfg")
         self.assertTrue(symmetry["use_data_augmentation"])
         self.assertFalse(symmetry["use_mirror_loss"])
@@ -507,6 +519,8 @@ class Go2WTests(unittest.TestCase):
           commands, reference = asdict(actual.commands["twist"]), asdict(expected.commands["twist"])
           commands.pop("viz")
           reference.pop("viz")
+          self.assertEqual(commands.pop("rel_heading_envs"), 0.8)
+          reference.pop("rel_heading_envs")
           self.assertEqual(commands, reference)
           self.assertEqual(actual.decimation, expected.decimation)
           for group in ("actor", "critic"):
@@ -527,8 +541,10 @@ class Go2WTests(unittest.TestCase):
             a["params"].pop("asset_cfg", None)
             b["params"].pop("asset_cfg", None)
             self.assertEqual(a, b, event)
-          for reward in actual.rewards.keys() & expected.rewards.keys() - {"pose", "body_orientation_l2", "track_angular_velocity"}:
+          for reward in actual.rewards.keys() & expected.rewards.keys() - {"pose", "body_orientation_l2", "track_angular_velocity", "action_rate_l2"}:
             self.assertEqual(actual.rewards[reward].weight, expected.rewards[reward].weight, reward)
+          action_rate_weight = -0.02 if "v2" in go2w_task else expected.rewards["action_rate_l2"].weight
+          self.assertEqual(actual.rewards["action_rate_l2"].weight, action_rate_weight)
           self.assertEqual(actual.rewards["pose"].weight, 0.5)
           self.assertEqual(actual.rewards["body_orientation_l2"].weight, -0.7)
           self.assertEqual(actual.rewards["track_angular_velocity"].params["std"], 0.5)
@@ -537,7 +553,12 @@ class Go2WTests(unittest.TestCase):
           omitted = {"pose_weight", "foot_clearance_weight", "foot_swing_height_weight"}
           self.assertEqual(set(actual.curriculum), set(expected.curriculum) - omitted)
           for curriculum in actual.curriculum:
-            self.assertEqual(asdict(actual.curriculum[curriculum]), asdict(expected.curriculum[curriculum]))
+            reference = asdict(expected.curriculum[curriculum])
+            if curriculum == "command_vel" and "v2" in go2w_task and "StepUp" not in go2w_task:
+              reverse_ranges = ((-0.1, 0.45), (-0.3, 0.65), (-0.5, 0.90), (-0.5, 1.10))
+              for entry, velocity_range in zip(reference["params"]["velocity_stages"], reverse_ranges, strict=True):
+                entry["lin_vel_x"] = velocity_range
+            self.assertEqual(asdict(actual.curriculum[curriculum]), reference)
           self.assertNotIn("pose_weight", actual.curriculum)
           self.assertNotIn("foot_clearance_weight", actual.curriculum)
           self.assertNotIn("foot_swing_height_weight", actual.curriculum)
@@ -547,7 +568,7 @@ class Go2WTests(unittest.TestCase):
       cfg = go2w_env_cfgs.unitree_go2w_perceptive_rough_v2_env_cfg()
     self.assertEqual(set(cfg.curriculum), {"terrain_levels", "command_vel", "track_linear_velocity_weight"})
 
-  def test_v2_curriculum_runtime_matches_repository_g1_v2_at_stage_boundaries(self):
+  def test_v2_curriculum_keeps_user_reverse_ranges_and_g1_weight_timing(self):
     steps = (0, 1, 4000 * 24, 4000 * 24 + 1, 7000 * 24, 7000 * 24 + 1,
       9000 * 24, 9000 * 24 + 1, 14000 * 24, 14000 * 24 + 1,
       16000 * 24, 16000 * 24 + 1)
@@ -568,9 +589,21 @@ class Go2WTests(unittest.TestCase):
           term.func(env, torch.tensor([0]), **term.params)
         trace[step] = (asdict(command.cfg.ranges), cfg.rewards["track_linear_velocity"].weight)
       traces.append(trace)
-    self.assertEqual(traces[0], traces[1])
-    self.assertEqual(traces[0][4000 * 24][0]["lin_vel_x"], (0.15, 0.45))
-    self.assertEqual(traces[0][4000 * 24 + 1][0]["lin_vel_x"], (0.15, 0.65))
+    for step in steps:
+      ranges, weight = traces[0][step]
+      reference, reference_weight = traces[1][step]
+      self.assertEqual(weight, reference_weight)
+      self.assertEqual(ranges["lin_vel_y"], reference["lin_vel_y"])
+      self.assertEqual(ranges["ang_vel_z"], reference["ang_vel_z"])
+    # Native schedules apply only after their threshold, including step zero.
+    self.assertEqual(traces[0][0][0], traces[1][0][0])
+    self.assertEqual(traces[0][1][0]["lin_vel_x"], (-0.1, 0.45))
+    self.assertEqual(traces[0][4000 * 24][0]["lin_vel_x"], (-0.1, 0.45))
+    self.assertEqual(traces[0][4000 * 24 + 1][0]["lin_vel_x"], (-0.3, 0.65))
+    self.assertEqual(traces[0][9000 * 24][0]["lin_vel_x"], (-0.3, 0.65))
+    self.assertEqual(traces[0][9000 * 24 + 1][0]["lin_vel_x"], (-0.5, 0.90))
+    self.assertEqual(traces[0][16000 * 24][0]["lin_vel_x"], (-0.5, 0.90))
+    self.assertEqual(traces[0][16000 * 24 + 1][0]["lin_vel_x"], (-0.5, 1.10))
     self.assertEqual(traces[0][7000 * 24][1], 1.5)
     self.assertEqual(traces[0][7000 * 24 + 1][1], 1.35)
 

@@ -17,9 +17,17 @@ GO2W_MESH_XML = GO2W_CYLINDER_XML.with_name("go2w_mesh.xml")
 GO2W_COMMON_XML = GO2W_CYLINDER_XML.with_name("go2w_common.xml")
 # Change to GO2W_MESH_XML to use the original wheel mesh in every Go2W task.
 GO2W_XML = GO2W_CYLINDER_XML
-LEG_JOINTS = (r".*_(hip|thigh|calf)_joint",)
-WHEEL_JOINTS = (r".*_wheel_joint",)
-# Natural model order, also used by contact sensors, hub sites and rewards.
+LEG_JOINTS = (
+  "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+  "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+  "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+  "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+)
+WHEEL_JOINTS = ("FL_wheel_joint", "FR_wheel_joint", "RL_wheel_joint", "RR_wheel_joint")
+# Canonical policy/observation order, independent of XML element ordering.
+# Builtin actuators use the same names as their target joints.
+LEG_ACTUATORS = LEG_JOINTS
+WHEEL_ACTUATORS = WHEEL_JOINTS
 WHEEL_SITES = ("FL", "FR", "RL", "RR")
 WHEEL_BODIES = ("FL_wheel_link", "FR_wheel_link", "RL_wheel_link", "RR_wheel_link")
 WHEEL_GEOMS = (

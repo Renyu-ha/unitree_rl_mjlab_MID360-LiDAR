@@ -44,6 +44,7 @@ class Go2WSymmetry:
       offset = 0
       for name, shape in zip(names, observations.group_obs_term_dim[group], strict=True):
         term_cfg = observations.get_term_cfg(group, name)
+        self._validate_term_order(env, name, term_cfg)
         perm, sign = self._term_transform(env, name, term_cfg)
         width = len(perm)
         if len(shape) != 1 or shape[0] % width:
@@ -54,6 +55,27 @@ class Go2WSymmetry:
           signs.extend(sign)
         offset += shape[0]
       self.transforms[group] = (indices, signs)
+
+  @staticmethod
+  def _validate_term_order(env, name, cfg):
+    if name in ("joint_pos", "joint_vel", "wheel_vel", "foot_height"):
+      selection = cfg.params["asset_cfg"]
+      if name == "foot_height":
+        actual, expected = selection.site_names, list(_LEGS)
+      elif name == "wheel_vel":
+        actual = selection.joint_names
+        expected = [f"{leg}_wheel_joint" for leg in _LEGS]
+      else:
+        actual = selection.joint_names
+        expected = [f"{leg}_{joint}_joint" for leg in _LEGS for joint in ("hip", "thigh", "calf")]
+      if actual is None or list(actual) != expected:
+        raise ValueError(f"Go2W symmetry {name} order must be {expected}, got {actual}")
+    if name in ("foot_contact", "foot_contact_forces", "foot_air_time"):
+      sensor = env.scene[cfg.params["sensor_name"]]
+      actual = [primary.rsplit("/", 1)[-1] for primary in sensor.primary_names]
+      expected = [f"{leg}_wheel_link_collision" for leg in _LEGS]
+      if actual != expected:
+        raise ValueError(f"Go2W symmetry contact order must be {expected}, got {actual}")
 
   @staticmethod
   def _term_transform(env, name, cfg):

@@ -95,8 +95,8 @@
 
 - [公共奖励配置](../src/tasks/velocity/velocity_env_cfg.py)
 - [Go2W 配置及覆盖](../src/tasks/velocity/config/go2w/env_cfgs.py)
-- [公共奖励函数](../src/tasks/velocity/mdp/rewards.py)
-- [轮奖励函数](../src/tasks/velocity/mdp/wheel_rewards.py)
+- [公共奖励函数](../src/tasks/velocity/mdp/rewards/locomotion.py)
+- [轮奖励函数](../src/tasks/velocity/mdp/rewards/wheel.py)
 
 V2 的线速度跟踪权重随课程由 `1.5 → 1.35 → 1.2`；pose 固定为0.5。`foot_gait`、`foot_clearance`、`foot_slip`、`angular_momentum` 被删除，`foot_swing_height` 未加入。离地时间/接触状态观测不等于对应奖励。
 
@@ -346,7 +346,7 @@ StepUp-Finetune 在这15项上新增：
 | 二阶 action `action_smoothness_second_order` | 函数已提供，任何任务均未配置；按 episode 长度跳过历史不足的前两步，零动作不是无效样本 |
 | 接触力变化 `grf_smoothness` | 有状态类已提供，任何任务均未配置；世界系总力、默认仅 Z，逐策略步保存一/二阶差分，支持并行环境局部重置 |
 
-代码位置：`src/tasks/velocity/mdp/wheel_rewards.py`、`src/tasks/velocity/mdp/smoothness_rewards.py`；公式与迁移差异见 `doc/go2w_perceptive_zh.md`。标准 V2 和 StepUp-Finetune 的非零项数量分别由15/18变为16/19。slide 是独立的接地侧滑约束，不作为持续悬空的修复项。
+代码位置：`src/tasks/velocity/mdp/rewards/wheel.py`、`src/tasks/velocity/mdp/rewards/smoothness.py`；公式与迁移差异见 `doc/go2w_perceptive_zh.md`。标准 V2 和 StepUp-Finetune 的非零项数量分别由15/18变为16/19。slide 是独立的接地侧滑约束，不作为持续悬空的修复项。
 
 验证：项目固定 mjlab 提交、MuJoCo 3.16.0 / mujoco-warp 3.16.0.post1 环境下，`tests.test_go2w` 与 `tests.test_reward_smoothness` 共41项CPU检查通过；另以2个实际平地仿真环境运行12个控制步并局部重置，核对四轮顺序、逐轮力形状及三项输出有限性。只有slide进入环境reward manager，另外两项仅在验证中直接调用。没有进行GPU训练或策略效果评估。
 
