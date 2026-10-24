@@ -6,7 +6,7 @@
 
   <default>
     <default class="go2">
-      <geom friction="0.4" margin="0.001" condim="1" />
+      <geom friction="1" margin="0" condim="1" />
       <joint axis="0 1 0" damping="0.1" armature="0.01" frictionloss="0.2" />
       <default class="abduction">
         <joint axis="1 0 0" range="-1.0472 1.0472" />
@@ -28,7 +28,7 @@
       <default class="collision">
         <geom group="3" />
         <default class="foot">
-          <geom size="0.022" pos="-0.002 0 -0.2264" priority="1" condim="6"
+          <geom size="0.022" pos="-0.002 0 -0.2264" priority="1" condim="6" margin="0.001"
             friction="0.8 0.02 0.01" />
         </default>
       </default>
@@ -68,7 +68,7 @@
       <geom mesh="base_2" material="black" class="visual" />
       <geom mesh="base_3" material="white" class="visual" />
       <geom mesh="base_4" material="gray" class="visual" />
-      <!-- Warp 3.16 box-box CCD requires zero margin. Other shapes retain 1 mm. -->
+      <!-- Explicit zero margin keeps the boxes compatible with Warp 3.16 CCD. -->
       <geom name="base_link_collision0" size="0.1881 0.04675 0.057" type="box" margin="0" class="collision" />
       <geom name="base_link_collision1" size="0.05 0.045" pos="0.285 0 0.01" type="cylinder" class="collision" />
       <geom name="base_link_collision2" size="0.047" pos="0.293 0 -0.06" class="collision" />

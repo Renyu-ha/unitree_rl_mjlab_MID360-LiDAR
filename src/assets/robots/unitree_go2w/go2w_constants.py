@@ -84,8 +84,9 @@ def get_go2w_robot_cfg() -> EntityCfg:
       # Enable robot-to-robot contacts as well as robot-to-terrain contacts.
       # MuJoCo retains its default same-body / parent-child contact filtering.
       contype=1, conaffinity=1,
-      # The reference FULL_COLLISION uses CollisionCfg's condim=3, priority=0
-      # defaults. Keep the MJCF friction coefficients without extra overrides.
-      condim=3, priority=0,
+      # Match G1: frictionless non-wheel self contacts, frictional wheels.
+      # Wheel priority makes wheel friction randomization control ground contacts.
+      condim={r".*_wheel_link_collision$": 3, ".*": 1},
+      priority={r".*_wheel_link_collision$": 1, ".*": 0},
     ),),
   )

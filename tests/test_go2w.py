@@ -81,9 +81,11 @@ class Go2WTests(unittest.TestCase):
     model = spec.compile()
     self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_NATIVECCD)
     self.assertFalse(model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_MULTICCD)
-    for name in ("base_link_collision0", "FL_thigh_collision", "FR_thigh_collision",
-                 "RL_thigh_collision", "RR_thigh_collision"):
-      self.assertEqual(model.geom(name).margin[0], 0.0)
+    for geom_id in range(model.ngeom):
+      geom = model.geom(geom_id)
+      if "_collision" in geom.name and "wheel_link" not in geom.name:
+        self.assertEqual(geom.margin[0], 0.0, geom.name)
+        self.assertEqual(geom.friction[0], 1.0, geom.name)
     for leg in ("FL", "FR", "RL", "RR"):
       self.assertAlmostEqual(model.geom(f"{leg}_wheel_link_collision").margin[0], 0.001)
     # Native compilation alone missed the 3.16 box-margin limitation. Check the
@@ -191,20 +193,55 @@ class Go2WTests(unittest.TestCase):
           self.assertAlmostEqual(qpos[self.model.joint(name).qposadr[0]], value)
 
   def test_collision_masks_enable_self_contacts_and_disable_visuals(self):
-    # Retain reference condim/priority/friction, with self collision enabled.
+    # Match G1's contact dimensions and priority; retain XML wheel friction.
     for geom_id in range(self.model.ngeom):
       geom = self.model.geom(geom_id)
       with self.subTest(geom=geom.name):
         if "_collision" in geom.name:
-          self.assertEqual(int(geom.condim[0]), 3)
-          self.assertEqual(int(geom.priority[0]), 0)
+          wheel = "wheel_link" in geom.name
+          self.assertEqual(int(geom.condim[0]), 3 if wheel else 1)
+          self.assertEqual(int(geom.priority[0]), 1 if wheel else 0)
           self.assertEqual(int(geom.contype[0]), 1)
           self.assertEqual(int(geom.conaffinity[0]), 1)
+          self.assertAlmostEqual(geom.margin[0], 0.001 if wheel else 0.0)
           if "wheel_link" in geom.name:
             self.assertEqual(geom.friction.tolist(), [0.8, 0.02, 0.01])
+          else:
+            self.assertEqual(geom.friction.tolist(), [1.0, 0.005, 0.0001])
         else:
           self.assertEqual(int(geom.contype[0]), 0)
           self.assertEqual(int(geom.conaffinity[0]), 0)
+
+  def test_low_wheel_friction_controls_ground_contacts(self):
+    spec = self.robot.spec.copy()
+    spec.worldbody.add_geom(
+      name="friction_test_ground", type=mujoco.mjtGeom.mjGEOM_PLANE,
+      size=(2.0, 2.0, 0.1), friction=(1.0, 0.005, 0.0001),
+    )
+    model = spec.compile()
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, model.key("init_state").id)
+    mujoco.mj_forward(model, data)
+    wheel_ids = {model.geom(f"{leg}_wheel_link_collision").id for leg in ("FL", "FR", "RL", "RR")}
+    ground_id = model.geom("friction_test_ground").id
+    # Lower the robot until all four wheels contact the fixed ground plane.
+    data.qpos[2] -= max(data.geom_xpos[wheel_id, 2] for wheel_id in wheel_ids) - WHEEL_RADIUS + 0.005
+    for wheel_id in wheel_ids:
+      model.geom_friction[wheel_id, 0] = 0.25
+    mujoco.mj_forward(model, data)
+    contacted_wheels = set()
+    for contact in data.contact:
+      pair = set(contact.geom)
+      if ground_id not in pair:
+        continue
+      for wheel_id in wheel_ids & pair:
+        contacted_wheels.add(wheel_id)
+        with self.subTest(wheel=model.geom(wheel_id).name):
+          self.assertEqual(contact.dim, 3)
+          self.assertAlmostEqual(contact.friction[0], 0.25)
+          self.assertAlmostEqual(contact.friction[1], 0.25)
+          self.assertGreaterEqual(contact.efc_address, 0)
+    self.assertEqual(contacted_wheels, wheel_ids)
 
   def test_wheel_cylinders_have_45mm_width_and_preserve_radius_center_axle(self):
     model = self.model

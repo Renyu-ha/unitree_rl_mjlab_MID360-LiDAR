@@ -66,7 +66,7 @@ HIM 与双轮 AssetOptions armature=0；DreamWaQ 同样继承 0，且 `wheel_arm
 | HIM 与 DreamWaQ | PhysX TGS；位置迭代 4、速度迭代 0；contact_offset=0.01 m、rest_offset=0；max_depenetration_velocity=1 m/s；substeps=1 | 启用，0.25–1.25；地形静/动摩擦各 0.8 |
 | Wheel-Legged-Gym | 同样 TGS 4/0、offset 0.01/0、最大去穿透速度 1 | 启用，0.1–2.0 |
 | 公共 robot_lab | PhysX 资产 Go2W 4/1、B2W 4/0，最大去穿透速度 1；另提供 Newton 配置，不将 PhysX 参数当成另一后端的实际设置 | 公共事件静摩擦 0.3–1.0、动摩擦 0.3–0.8、恢复系数 0–0.5 |
-| 我们 Go2W v2 | MuJoCo/MJWarp；iterations=10、ls_iterations=20、ccd_iterations=50；命名碰撞体 condim=3、priority=0 | 现对齐本仓库 G1 v2，轮 geom friction 启动随机化 0.25–1.8；四轮共享抽样 |
+| 我们 Go2W v2 | MuJoCo/MJWarp；iterations=10、ls_iterations=20、ccd_iterations=50；非轮碰撞体 condim=1、priority=0，轮 condim=3、priority=1 | 现对齐本仓库 G1 v2，轮 geom friction 启动随机化 0.25–1.8；四轮共享抽样，轮优先级高于默认地面，避免低摩擦抽样被地面摩擦覆盖 |
 
 来源：[HIM 基类][him-base]、[DreamWaQ 基类][dream-base]、[双轮基类][wlg-base]、[robot_lab 资产][rl-asset]及[公共环境][rl-env]。PhysX `contact_offset`、MuJoCo `margin`、软约束 `solref/solimp` 不是一一对应的参数，求解器迭代次数也不能直接横向比较。MuJoCo 的接触参数解释见[官方模型文档](https://mujoco.readthedocs.io/en/stable/modeling.html#solver-parameters)。
 
