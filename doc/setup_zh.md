@@ -59,6 +59,8 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 需要 W&B 时追加 `--agent.logger=wandb --agent.wandb-project=go2w_mid360`，提前按自己的账号登录。实时查看追加 `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`，浏览器访问训练机的 8096 端口。可视化只同步选定环境，有额外同步开销。
 
+Viser 显示层会转换 MuJoCo 相机俯仰角的正负约定，避免负角度被解释为从地形下方仰视；native 和录像继续使用原相机配置。`play --start-paused=True` 也会先同步真实机器人姿态，无需点击 Step 才显示完整模型。普通 play 与边界检查共用此修复，训练实时查看也使用一致的角度转换；光照和材质保持上游默认。
+
 续训显式选择原运行目录和 checkpoint：
 
 ```bash
@@ -118,6 +120,6 @@ python -m mujoco_warp._src.collision_driver_test CollisionTest.test_cylinder_box
 
 原 RTX 4090 的固定 NaN 场景中，原版和仅 #1796 产生约 61.87 m 的异常接触；组合修复保留接触且 forward/step 有限，三项上游 GPU 回归通过。组合结果与原生 MuJoCo 的接触位置仍相差 1.364 mm，超过原诊断脚本自设的 1 mm 门槛，因此旧报告整体 `passed:false`，不能改称全部通过。另一份 EPA 现场在 30/64/128 时与 256 参考的七个接触一致，但 30 后续训练仍溢出；用户当前 64 试训尚未报告告警。
 
-当前本机 CPU 通过 69 项项目回归，覆盖零 margin、两种轮碰撞模型及地形净空；两种模型各完成 32 环境、64 个 rollout 控制步、两轮 PPO、checkpoint/ONNX 导出，以及 checkpoint 和 ONNX 各 16 个回放控制步，动作、观测和奖励有限。安装包检查确认两份入口和共享 XML 均包含在内。此前三项上游算法回归、依赖一致性、普通入口断点续训及原始 NaN 输入回放已通过；原版后端环境通过一条 `pip install -e .` 安装了上述 fork 的固定 Git 提交。
+当前本机 CPU 通过 71 项项目回归，覆盖零 margin、两种轮碰撞模型及地形净空；两种模型各完成 32 环境、64 个 rollout 控制步、两轮 PPO、checkpoint/ONNX 导出，以及 checkpoint 和 ONNX 各 16 个回放控制步，动作、观测和奖励有限。安装包检查确认两份入口和共享 XML 均包含在内。此前三项上游算法回归、依赖一致性、普通入口断点续训及原始 NaN 输入回放已通过；原版后端环境通过一条 `pip install -e .` 安装了上述 fork 的固定 Git 提交。
 
 这些证据支持当前训练配置，不证明所有 GPU 状态或长期训练必然稳定。本次固定安装的本机验证使用 CPU；目标 4090 的长期训练仍需持续观察。

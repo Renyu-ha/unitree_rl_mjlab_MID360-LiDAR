@@ -16,9 +16,10 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
-from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
+from mjlab.viewer import NativeMujocoViewer
 
 from src.utils.physics_backend import physics_backend_info
+from src.utils.play_viewer import ViserPlayViewer
 
 
 @dataclass(frozen=True)

@@ -52,6 +52,8 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 Default: GPU 0, local TensorBoard, logs under `logs/rsl_rl/go2w_perceptive/`. Use `--gpu-ids=None` for CPU checks. A new backend may compile Warp kernels on its first run; subsequent runs use the cache. Optional W&B: `--agent.logger=wandb --agent.wandb-project=go2w_mid360`. Optional live viewer: `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`.
 
+The Viser display adapter converts MuJoCo's elevation sign convention while preserving native/video camera settings. Paused play publishes real initial transforms before the first frame, without requiring a Step action. Normal play and border inspection share the fix; the training viewer uses the same elevation conversion. Lighting and materials retain upstream defaults.
+
 Select the source run explicitly when resuming:
 
 ```bash
@@ -101,6 +103,6 @@ Project regressions retain full-task NaN injection and save-failure handling, fr
 
 On the original RTX 4090 NaN input, the combined fixes preserve contacts and finite forward/step results; all three upstream GPU regressions pass. The contact position still differs from native MuJoCo by 1.364 mm, exceeding the old diagnostic tool's arbitrary 1 mm threshold, so its overall `passed:false` must not be described as a full pass. A separate EPA snapshot matched the 256 reference at capacities 30/64/128, but capacity 30 later overflowed in training. The user has not reported warnings in the current capacity-64 trial.
 
-Current CPU validation passes 69 project regressions, including zero margins, both wheel models and terrain clearance. Each model completed 32 environments, 64 rollout control steps, two PPO updates, checkpoint/ONNX export, and 16 playback control steps each for checkpoint and ONNX, with finite actions, observations and rewards. Packaging includes both entry XMLs and the shared body. Earlier checks passed three upstream algorithm regressions, dependency consistency, normal-entry resume and original NaN input replay. A baseline backend environment installed the pinned fork Git commit with one `pip install -e .`.
+Current CPU validation passes 71 project regressions, including zero margins, both wheel models and terrain clearance. Each model completed 32 environments, 64 rollout control steps, two PPO updates, checkpoint/ONNX export, and 16 playback control steps each for checkpoint and ONNX, with finite actions, observations and rewards. Packaging includes both entry XMLs and the shared body. Earlier checks passed three upstream algorithm regressions, dependency consistency, normal-entry resume and original NaN input replay. A baseline backend environment installed the pinned fork Git commit with one `pip install -e .`.
 
 Frozen-state results and short CPU runs do not prove long-run GPU stability; continue observing training on the target 4090. See the [Go2W guide](go2w_perceptive_zh.md) for task and perception details.

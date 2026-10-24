@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.tasks.velocity.mdp.velocity_command import UniformVelocityCommand, UniformVelocityCommandCfg
-from mjlab.viewer import ViserPlayViewer
+from src.utils.play_viewer import ViserPlayViewer
 
 from src.utils.border_inspection import find_terrain_border
 

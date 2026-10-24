@@ -58,7 +58,7 @@ class LiveTrainingViewer(ManagerBasedRlEnv):
       self._scene.create_scene_gui(
         camera_distance=env.cfg.viewer.distance,
         camera_azimuth=env.cfg.viewer.azimuth,
-        camera_elevation=env.cfg.viewer.elevation,
+        camera_elevation=-env.cfg.viewer.elevation,
         show_debug_viz_control=False,
       )
       with self._server.gui.add_tab_group().add_tab("Groups"):
