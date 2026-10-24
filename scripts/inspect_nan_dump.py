@@ -9,6 +9,7 @@ Recorded failure arrays are reported separately from either replay.
 """
 
 import argparse
+import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
@@ -191,6 +192,7 @@ def inspect(args):
       "geoms": [model.geom(int(contact.geom1)).name, model.geom(int(contact.geom2)).name],
       "distance": float(contact.dist),
       "position": contact.pos.tolist(),
+      "normal": contact.frame[:3].tolist(),
     }
     for contact in native.contact
   ]
@@ -203,6 +205,8 @@ def inspect(args):
   report = {
     "versions": versions,
     "device": args.device,
+    "engine_source": str(Path(mjw.__file__).resolve()),
+    "collision_source_sha256": hashlib.sha256((Path(mjw.__file__).parent / "_src/collision_gjk.py").read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
     "dump": str(args.dump.resolve()),
     "model": str(model_path.resolve()),
     "state_key": key,

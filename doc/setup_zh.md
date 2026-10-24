@@ -215,7 +215,7 @@ MJB 与 NPZ 保持同目录。该模式默认选择最后一次操作前的输�
 多环境或训练 CUDA Graph；具体错误已经缩小到右前轮与箱体的 GPU 碰撞路径，
 仍未确定是算法数值稳定性、编译器或驱动问题。
 
-保持环境不变，分别运行以下两组对照，每组只改变一个因素：
+保持环境不变，曾分别运行以下两组对照，每组只改变一个因素：
 
 ```bash
 python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
@@ -236,11 +236,58 @@ python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_4
 
 同时检查新的 `contacts_before_solver[].contact_sanity`、接触位置和
 `after_forward/after_step` 的有限性。仅不再产生 NaN、但接触点仍远离轮子，
-不能算修复。若 64 仍错而关闭 FMA 后接触和计算均恢复正常，说明该错误
-对碰撞编译中的浮点融合敏感，下一步检查具体数值公式；若两组都错，再做
-相同版本 Warp 的不同 CUDA 构建或驱动对照。本机 CPU 验证不能替代这两组 GPU 实测。
+不能算修复。用户随后上传的 `horizon64.json` 仍有相同的 61.87 m 异常
+接触点和 NaN；`fma_off.json` 虽然计算有限，却丢失全部接触，因此两者
+均未修复这次 NaN。它们说明碰撞结果对浮点舍入路径敏感，不能据此认定
+CUDA 有缺陷。下一步优先验证上游碰撞修复。
 对照开关、真实碰撞 kernel 的选项应用与异常退出恢复通过全部 71 项 CPU 测试，
 上传的 NaN 输入也分别完成 CPU 容量 64/FMA 开启及容量 24/FMA 关闭的命令行检查。
+
+#### 固定版本的上游修复对比
+
+[Newton #4573](https://github.com/newton-physics/newton/issues/4573) 记录了
+同类圆柱/箱体接触点远离几何体、随后求解产生 NaN 的问题。其维护者指向
+[MuJoCo-Warp #1771](https://github.com/google-deepmind/mujoco_warp/pull/1771)：
+避免在不包含投影点的 EPA 三角面上外插接触点；另有
+[#1796](https://github.com/google-deepmind/mujoco_warp/pull/1796)，排除近乎
+重复顶点造成的退化三角面参与最近面选择。2026-10-24 核对时两项 PR
+均未合并。仓库保留其固定提交的原始差异与上游测试，不自创碰撞公式。
+
+更新仓库后，在原 4090 环境执行以下一条命令；MJB 与 NPZ 保持同目录：
+
+```bash
+python scripts/check_upstream_collision_fix.py \
+  --dump logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz --device cuda:0
+```
+
+脚本在新的日志目录中复制四份引擎，比较原版、仅 #1771、仅 #1796 与
+组合版本，逐一启动独立进程，核验实际加载的源码路径和校验和。FMA
+保持开启、horizon 保持 24，安装包和正常训练入口不变，无需重新安装。
+输出位于 `logs/upstream_collision_check/<时间>/summary.json`，各版本
+子目录包含原始回放与上游测试日志。首次编译各版本内核可能需要几分钟。
+
+通过要求包括：原版重现故障；候选接触非空且合理，位置、距离、法线
+与原生 MuJoCo 分别在 1 mm、50 μm、5° 内一致；forward/step 均有限、
+诊断位为零；三项上游测试全部通过。随后脚本自动运行项目回归测试，
+以及 32 环境、64 步和两轮 PPO 检查，全部通过才输出总体 `passed:true`。
+如果原版未复现，报告 `baseline_not_reproduced_or_unverified` 并返回非零，
+不能宣称已修复 GPU 故障。
+
+本机 CPU 上的三项上游测试结果如下；原始 NaN 输入在 CPU 四个版本均
+不复现，因此 CPU 对比的总体结论仍为未证实。
+
+| 引擎版本 | 上游测试通过数 |
+| --- | --- |
+| 原版 3.16.0 | 0/3 |
+| 仅 #1771 | 2/3 |
+| 仅 #1796 | 2/3 |
+| #1771 + #1796 | 3/3 |
+
+组合版本另已通过全部 76 项 CPU 项目测试和上述短程 Go2W/PPO 检查。
+最终采用前仍须取得原 4090 的对比结果，再做较长任务验证；这些有限检查
+不能证明所有地形和长期训练均稳定。验证通过后再固定经过审查的依赖提交，
+正式安装继续保持 `pip install -e .`。此次工具不会自动替换训练依赖，
+也不把另一份 EPA 容量溢出现场视为已经解决。
 
 ## 3. Go2W 训练和可视化
 

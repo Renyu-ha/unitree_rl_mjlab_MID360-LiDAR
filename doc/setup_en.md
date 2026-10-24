@@ -179,7 +179,7 @@ forward acceleration and step velocity become nonfinite. Reproduction needs no
 PPO, multiple worlds or training CUDA graph. This localizes the error to the
 GPU cylinder/box collision path but does not establish a compiler/driver defect.
 
-Keep the environment fixed and run two independent diagnostic controls:
+Two independent diagnostic controls were run with the environment fixed:
 
 ```bash
 python scripts/inspect_nan_dump.py logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz \
@@ -198,10 +198,55 @@ not merely the source function's module. It rejects an experiment if no CCD
 kernel options were applied. All in-memory overrides are restored on exit,
 including exceptions; installed files, training defaults and warnings are unchanged.
 Judge contact sanity/position as well as finite forward/step outputs. Finite
-solver output with an implausible contact is not a fix. If 64 still fails while
-FMA-off restores both valid contacts and finite physics, investigate numerical
-sensitivity in collision formulas. If both fail, compare CUDA builds or drivers
-without changing the other versions. CPU checks do not replace these GPU tests.
+solver output with an implausible contact is not a fix. The user's subsequent
+`horizon64.json` retained the same 61.87 m bad contact and NaN. `fma_off.json`
+was finite but lost all contacts. Neither fixes this NaN; rounding sensitivity
+does not establish a CUDA defect. Upstream collision fixes are the next check.
 All 71 CPU tests passed, including real CCD option application and restoration
 after exceptions. Both CLI controls also completed against the uploaded NaN inputs on CPU.
+
+### Pinned upstream collision candidates
+
+[Newton #4573](https://github.com/newton-physics/newton/issues/4573) reports the
+same class of cylinder/box far-witness contact followed by solver NaN. Its
+maintainer points to [MuJoCo-Warp #1771](https://github.com/google-deepmind/mujoco_warp/pull/1771),
+which selects an EPA face containing the witness projection rather than
+extrapolating outside it. [#1796](https://github.com/google-deepmind/mujoco_warp/pull/1796)
+excludes sliver faces with near-repeated vertices from nearest-face selection.
+Both PRs were open and unmerged when checked on 2026-10-24. Exact pinned upstream
+diffs and regression tests are bundled; no local collision formula is added.
+
+After updating the repository, run one command in the original 4090 environment,
+keeping the original MJB beside the NPZ:
+
+```bash
+python scripts/check_upstream_collision_fix.py \
+  --dump logs/go2w_nan_dump/nan_dump_20261024_120617_484587.npz --device cuda:0
+```
+
+The tool creates four private engine copies: baseline, 1771, 1796 and both.
+Fresh processes verify their actual source paths and checksums. FMA stays on and
+horizon stays 24; installed packages and normal training are unchanged, with no
+reinstallation required. Results go to
+`logs/upstream_collision_check/<timestamp>/summary.json`, with per-variant replay
+and test logs. First-time compilation can take several minutes.
+
+A candidate requires reproduction on baseline, finite forward/step physics,
+zero diagnostic flags, nonempty sane contacts matching native MuJoCo in pairs,
+counts, position (1 mm), distance (50 micrometers) and normal angle (5 degrees),
+and all three upstream regressions passing. The selected candidate must then
+pass the project regression suite and a 32-world, 64-step Go2W rollout with two
+PPO iterations. Only then is overall `passed:true`. If baseline does not
+reproduce, status is `baseline_not_reproduced_or_unverified` with a nonzero exit;
+this does not establish a GPU fix.
+
+On local CPU, baseline passed 0/3 upstream cases, 1771 and 1796 each passed 2/3,
+and both passed 3/3. All four versions had valid finite contacts for the user's
+original input on CPU, so that comparison remains inconclusive. The combined
+engine separately passed all 76 CPU project tests and the short Go2W/PPO check.
+Original-GPU validation and longer task checks remain necessary. These bounded
+checks do not prove all-terrain or long-run stability. Only after verification
+should a reviewed source revision become the pinned production dependency,
+preserving `pip install -e .`. The tool does not promote candidates automatically
+or claim to resolve the separate EPA-capacity overflow snapshot.
 
