@@ -20,6 +20,13 @@ Shared velocity tasks use solver/linesearch budgets 50/100 after fixed-state
 convergence regression checks; contact definitions and solver tolerance are
 unchanged by this numerical-budget adjustment.
 
+Nominal root height remains 0.4 m. Task-level reset clearance can lift it before
+the first collision solve to separate conservative robot geom bounds from the
+local terrain envelope by 5 mm plus margins. The same guard covers all Go2W
+train/play task variants; it changes reset placement, not the XML geometry,
+default joint angles, controller or rewards. It is not a guarantee against
+dynamic penetration during subsequent motion.
+
 On 2026-10-24 the training collision profile was aligned with this repository's G1: non-wheel collision geoms use `condim=1, priority=0`, while the four wheels use `condim=3, priority=1`. This overrides the XML contact dimensions and priority in `get_go2w_robot_cfg()`, and allows randomized wheel friction below the terrain's friction to govern wheel-ground contacts. Non-wheel base sliding friction is set to `1` directly in the XML; wheel friction remains `0.8 0.02 0.01` before task randomization. Collision masks are retained.
 
 The mjlab-main / MuJoCo-Warp 3.16 branch initially set `margin="0"` on the five box collision geoms (the base and four thighs), because version 3.16 rejects box-box contacts with nonzero margin when native CCD or MultiCCD is enabled. On 2026-10-24 zero margin was extended to all non-wheel collision geoms, matching G1. The wheel defaults explicitly retain `margin="0.001"`. Native CCD and MultiCCD stay enabled at their engine defaults. Geometry dimensions and wheel tread shape are unchanged by the margin adjustment.

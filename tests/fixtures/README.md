@@ -22,3 +22,6 @@ clears both diagnostic flags, and compares accelerations against a 100/200
 reference with the same tolerance, inputs, contacts and randomized model fields.
 This is a fixed-state regression, not proof that every possible GPU contact or
 long training run converges within a finite budget.
+
+These inputs predate the terrain-clearance reset guard. Replay intentionally
+restores the original frozen state to retain the solver-budget regression.

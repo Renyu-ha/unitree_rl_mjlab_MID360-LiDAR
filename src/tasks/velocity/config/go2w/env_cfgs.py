@@ -28,6 +28,7 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
 )
 from src.tasks.velocity import mdp
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
+from src.tasks.velocity.mdp.spawn_clearance import ensure_spawn_clearance
 from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
 
 SCAN = {
@@ -352,6 +353,13 @@ def _make_go2w_env_cfg(
       twist.ranges.lin_vel_x = (-0.5, 1.0)
       twist.ranges.lin_vel_y = (-0.5, 0.5)
       twist.ranges.ang_vel_z = (-0.5, 0.5)
+  # Run after every other reset event, including play-mode terrain relocation.
+  if "randomize_terrain" in cfg.events:
+    relocation = cfg.events.pop("randomize_terrain")
+    cfg.events = {"randomize_terrain": relocation, **cfg.events}
+  cfg.events["ensure_spawn_clearance"] = EventTermCfg(
+    func=ensure_spawn_clearance, mode="reset", params={"clearance": 0.005},
+  )
   return cfg
 
 

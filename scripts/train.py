@@ -21,6 +21,7 @@ from mjlab.utils.wrappers import VideoRecorder
 
 from src.utils.training_viewer import LiveTrainingViewer
 from src.utils.nan_capture import install_nan_capture
+from src.utils.epa_capture import install_epa_capture
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class TrainConfig:
   viewer_port: int = 8080
   viewer_fps: float = 15.0
   enable_nan_guard: bool = False
+  capture_epa: bool = False
+  """Save the first EPA collision overflow and stop this diagnostic run."""
   torchrunx_log_dir: str | None = None
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 
@@ -103,6 +106,9 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   try:
     install_nan_capture(env.sim)
+    if cfg.capture_epa:
+      install_epa_capture(env.sim, log_dir / "epa_capture" / f"rank_{rank}", task_id)
+      print("[INFO] EPA capture enabled; the first overflow will be saved and stop this run.")
     log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
     resume_path: Path | None = None

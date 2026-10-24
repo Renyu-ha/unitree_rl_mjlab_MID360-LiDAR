@@ -68,6 +68,8 @@ instead of 10/20. Convergence tolerances, contact settings and overflow warnings
 remain unchanged; convergence still stops iterations early. On the full 10-by-6
 Go2W terrain, CPU checks with 32 environments and 256 Gaussian-action steps
 recorded 40,992 per-world physics calls per run, including reset forwards:
+These budget-comparison records predate the reset-clearance guard; the fixed
+state regression preserves the original inputs.
 
 | Action standard deviation | Old 10/20: linesearch / solver limits | New 50/100 |
 | --- | --- | --- |
@@ -101,4 +103,46 @@ scene, and attachment retains the parent values. The duplicate XML declaration
 is removed, leaving the task's `MujocoCfg` as the sole owner. Effective training
 values remain `pyramidal, 1`; standalone XML loading now also uses those defaults.
 See [MuJoCo option documentation](https://mujoco.readthedocs.io/en/stable/XMLreference.html#option).
+
+All Go2W variants now run `ensure_spawn_clearance` as their last reset event.
+Nominal height remains 0.4 m; only reset worlds needing additional clearance
+are lifted. The guard checks conservative robot geom bounds against terrain
+tops and every overlapping heightfield cell's vertices, retaining 5 mm plus
+collision margins. It supports the current plane, box/stair and upright
+heightfield terrains; tilted planes/heightfields fail explicitly. It protects
+reset placement, not all subsequent dynamic motion or self collision. Play-mode
+terrain relocation now precedes root reset so placement uses the new origin.
+
+```bash
+python scripts/check_spawn_clearance.py --device cuda:0 --output logs/spawn_clearance_check.json
+```
+
+This checks every configured terrain type and difficulty row, comparing frozen
+0.4/0.5/0.6 m resets with Warp and native MuJoCo collisions. CPU V2 checks confirmed
+native initial penetration in 16/40 rough and 4/40 wave samples at 0.4 m; the guard
+cleared both backends' penetration checks. All six Go2W task recipes passed,
+covering 3,456 reset poses. All 66 CPU tests, a 64-step rollout, two PPO iterations,
+checkpoint save/load, ONNX export and the normal training entry with both NaN/EPA
+capture passed.
+This did not reproduce the reported EPA=24 training state, so its cause remains
+unconfirmed. Diagnostic timing is not training throughput.
+
+Append `--capture-epa=True` to a normal training command to save the first EPA overflow
+and stop that diagnostic run, without waiting for NaN. Capture checks synchronize
+the device. Files go under the run's `epa_capture/rank_0/`; keep the NPZ and its
+referenced MJB together. Constructor graph captures precede installation and
+must be inspected separately. Replay the frozen collision on the original device:
+
+```bash
+python scripts/replay_epa_dump.py <run>/epa_capture/rank_0/epa_dump_latest.npz --device cuda:0
+```
+
+Replay must reproduce the original overflow before testing 64/128 against 256.
+A passing candidate restores contacts with finite, plausible positions/normals,
+zero overflow and agreement with the larger-capacity reference. This is evidence
+for one frozen state, not independent ground truth or long-run stability. The
+temporary private allocation override affects only replay, not installed files
+or training, and leaves warnings enabled. The adapter requires mujoco-warp 3.16.0
+and captured package versions. A controlled 5-edge overflow tests the capture
+chain; it does not reproduce the user's uncaptured 24-edge GPU case.
 
