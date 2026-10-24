@@ -82,12 +82,14 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 ONNX 回放使用 ONNX 自带的 ReferenceEvaluator，无需额外安装 ONNX Runtime。任务、模型、奖励、感知、边界检查及部署功能保留；详细参数见 [Go2W 说明](go2w_perceptive_zh.md)。
 
+Go2W 提供两份静态轮碰撞模型，默认 `xmls/go2w.xml` 为半径 86 mm、全宽 45 mm 的圆柱；`xmls/go2w_mesh.xml` 使用原 `wheel.stl` 的碰撞凸包，保留原始约 51.815 mm 轴向宽度。二者共用 `go2w_common.xml` 的机身、质量惯量、外观及传感器，轮子 margin 均为 0。在 `src/assets/robots/unitree_go2w/go2w_constants.py` 把 `GO2W_XML = GO2W_CYLINDER_XML` 改为 `GO2W_XML = GO2W_MESH_XML` 即可切换全部 Go2W train/play 任务；不新增 CLI。切换后重新启动训练或回放，控制和奖励配置保持一致。
+
 ## 保留的训练保护
 
 - 所有 Go2W train/play 任务在出生及每次 reset 最后执行地形净空保护。名义根高度仍为 0.4 m；根据当前关节姿态、朝向、机器人碰撞体包围盒和地形包络，仅抬高需要调整的环境，保留 5 mm 加碰撞 margin 的间隙。高度场检查重叠网格单元的全部顶点。覆盖当前平地、台阶、正反斜坡、粗糙和波浪地形；不支持的倾斜 plane/heightfield 会报错。这不限制后续动态运动的穿透量。
 - 共享速度任务主求解器/线搜索预算保留 `50/100`。原 `10/20` 的冻结触发状态在现预算下收敛，结果与 `100/200` 参考一致。达到停止条件会提前结束，预算不是每步固定执行次数，容差与告警保持不变。
 - `cone/impratio Attach conflict` 原因是 XML 的 `elliptic/100` 与场景的 `pyramidal/1` 重复冲突。已删除机器人 XML 的全局声明，继续由场景统一使用 `pyramidal/1`。
-- Go2W 非轮碰撞体使用零 margin、`condim=1, priority=0`；轮子保留 1 mm margin、`condim=3, priority=1`，摩擦按任务随机化。模型来源见 [SOURCE.md](../src/assets/robots/unitree_go2w/SOURCE.md)。
+- Go2W 全部碰撞体使用零 margin；非轮为 `condim=1, priority=0`，轮子为 `condim=3, priority=1`，摩擦按任务随机化。模型来源见 [SOURCE.md](../src/assets/robots/unitree_go2w/SOURCE.md)。
 
 NaN guard 先原子保存核心故障数据，再补充接触和随机化字段。无 tendon 的空字段会跳过；附加读取、保存或 latest 副本失败不会丢失已保存的核心转储。保留 NPZ、JSON 和配套 MJB，可逐帧查看或回放原始输入：
 
@@ -116,6 +118,6 @@ python -m mujoco_warp._src.collision_driver_test CollisionTest.test_cylinder_box
 
 原 RTX 4090 的固定 NaN 场景中，原版和仅 #1796 产生约 61.87 m 的异常接触；组合修复保留接触且 forward/step 有限，三项上游 GPU 回归通过。组合结果与原生 MuJoCo 的接触位置仍相差 1.364 mm，超过原诊断脚本自设的 1 mm 门槛，因此旧报告整体 `passed:false`，不能改称全部通过。另一份 EPA 现场在 30/64/128 时与 256 参考的七个接触一致，但 30 后续训练仍溢出；用户当前 64 试训尚未报告告警。
 
-本次清理后，本机 CPU 通过 65 项项目回归、三项上游算法回归和依赖一致性检查；普通训练入口完成 32 环境、两轮 PPO、checkpoint/ONNX 导出及一轮断点续训。checkpoint 与 ONNX 各完成 16 个回放控制步，动作、观测和奖励有限；原始 NaN 输入回放也完成。原版后端环境通过一条 `pip install -e .` 安装了上述 fork 的固定 Git 提交。
+当前本机 CPU 通过 69 项项目回归，覆盖零 margin、两种轮碰撞模型及地形净空；两种模型各完成 32 环境、64 个 rollout 控制步、两轮 PPO、checkpoint/ONNX 导出，以及 checkpoint 和 ONNX 各 16 个回放控制步，动作、观测和奖励有限。安装包检查确认两份入口和共享 XML 均包含在内。此前三项上游算法回归、依赖一致性、普通入口断点续训及原始 NaN 输入回放已通过；原版后端环境通过一条 `pip install -e .` 安装了上述 fork 的固定 Git 提交。
 
 这些证据支持当前训练配置，不证明所有 GPU 状态或长期训练必然稳定。本次固定安装的本机验证使用 CPU；目标 4090 的长期训练仍需持续观察。

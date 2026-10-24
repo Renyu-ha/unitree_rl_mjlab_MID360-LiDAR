@@ -12,7 +12,11 @@ from mjlab.actuator import BuiltinPositionActuatorCfg, BuiltinVelocityActuatorCf
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.utils.spec_config import CollisionCfg
 
-GO2W_XML = Path(__file__).parent / "xmls" / "go2w.xml"
+GO2W_CYLINDER_XML = Path(__file__).parent / "xmls" / "go2w.xml"
+GO2W_MESH_XML = GO2W_CYLINDER_XML.with_name("go2w_mesh.xml")
+GO2W_COMMON_XML = GO2W_CYLINDER_XML.with_name("go2w_common.xml")
+# Change to GO2W_MESH_XML to use the original wheel mesh in every Go2W task.
+GO2W_XML = GO2W_CYLINDER_XML
 LEG_JOINTS = (r".*_(hip|thigh|calf)_joint",)
 WHEEL_JOINTS = (r".*_wheel_joint",)
 # Natural model order, also used by contact sensors, hub sites and rewards.

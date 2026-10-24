@@ -1,6 +1,7 @@
 """Reset clearance on every configured terrain row, plus partial-reset isolation."""
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -12,6 +13,7 @@ from tests.physics_helpers import (
   assign_all_patches, audit_spawn_clearance, collision_stats, make_coverage_cfg,
   native_penetration,
 )
+from src.assets.robots.unitree_go2w import go2w_constants
 
 
 class SpawnClearanceTests(unittest.TestCase):
@@ -50,6 +52,20 @@ class SpawnClearanceTests(unittest.TestCase):
     self.assertLessEqual(stats["penetration_m"][0], 1e-5)
     self.assertFalse(stats["epa"][0])
     self.assertTrue(np.isfinite(env.sim.data.qpos.numpy()).all())
+
+  def test_mesh_wheels_clear_every_terrain_type_and_difficulty_row(self):
+    cfg, rows, names = make_coverage_cfg("Unitree-Go2W-Perceptive-Rough-v2", samples=1)
+    with patch.object(go2w_constants, "GO2W_XML", go2w_constants.GO2W_MESH_XML):
+      env = ManagerBasedRlEnv(cfg, device="cpu")
+    try:
+      report = audit_spawn_clearance(env, rows, names, resets=1, nominal_heights=(.2, .4))
+      self.assertTrue(report["passed"], [row for row in report["results"] if not row["passed"]])
+      qpos = env.sim.data.qpos[1:].clone()
+      env.reset(env_ids=torch.tensor([0]))
+      torch.testing.assert_close(env.sim.data.qpos[1:], qpos, atol=0, rtol=0)
+      self.assertLessEqual(native_penetration(env)[0], 1e-5)
+    finally:
+      env.close()
 
   def test_placement_away_from_platform_centers_clears_steps_and_slopes(self):
     env = self.env

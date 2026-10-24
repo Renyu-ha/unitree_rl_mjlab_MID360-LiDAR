@@ -2,7 +2,7 @@
 
 本分支固定 mjlab `8bb2bc9e`、MuJoCo 3.16.0、MuJoCo-Warp 3.16.0.post1（上游 #1771/#1796 修复及 EPA 容量 64）、Warp 1.18.0、RSL-RL 5.5.1。安装采用 Conda + pip，具体步骤和核心版本约束见 [安装说明](setup_zh.md)。
 
-所有非轮碰撞体使用零 margin，轮子保留 1 mm margin；非轮/轮子接触维度与优先级分别为 `1/0` 和 `3/1`。当前模型、控制、奖励及自碰撞设置不因本次仓库清理而改变。
+所有碰撞体使用零 margin；非轮/轮子接触维度与优先级分别为 `1/0` 和 `3/1`。轮碰撞默认使用圆柱，也提供原始 `wheel.stl` 网格版本，切换方法见下文；两种版本共用控制、奖励及自碰撞设置。
 
 ## 1. 原仓库如何实现感知运控
 
@@ -46,9 +46,9 @@ flowchart LR
 
 ## 2. Go2W 迁移内容
 
-Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。仅维护一份最终 `src/assets/robots/unitree_go2w/xmls/go2w.xml`，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据；角动量奖励仅为测试而移除，其传感器继续保留，后续调整奖励不联动清理传感器。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量与关节沿用参考模型；当前四个轮子的碰撞形状采用下述圆柱实验，自碰撞继续开启。来源与 BSD 许可证保存在 Go2W 资产目录。
+Go2W 模型基于 [ZhongL1/unitree_rl_mjlab_go2w](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/xmls/go2w.xml)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`。两份静态入口 `go2w.xml`（圆柱）和 `go2w_mesh.xml`（原始 mesh）共用 `src/assets/robots/unitree_go2w/xmls/go2w_common.xml` 的机身定义，碰撞体名称、轮毂 site、外观网格禁碰撞和 3 个传感器直接写入 XML；不再通过 Python 增删模型定义。传感器保留 `imu_ang_vel`、`imu_lin_vel`、`root_angmom`，关节状态直接读取仿真数据；角动量奖励仅为测试而移除，其传感器继续保留，后续调整奖励不联动清理传感器。删除运行时适配模块、额外来源清单及 3 个未使用网格，只保留实际使用的 14 份网格。连杆、质量、惯量与关节沿用参考模型；当前四个轮子的碰撞形状默认采用下述圆柱配置，也可切换为原始 mesh，自碰撞继续开启。来源与 BSD 许可证保存在 Go2W 资产目录。
 
-此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。2026-10-24 接触分配改为与本仓库 G1 对应：非轮碰撞体 `condim=1、priority=0`，四轮 `condim=3、priority=1`；摩擦继承 XML 并按任务随机化，自碰撞按用户要求开启。此前物理几何曾与参考对齐，当前仅四个轮碰撞几何改为圆柱；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。这些模型调整本身不能视为 NaN 修复。
+此前的资产配置对齐已采用 [ZhongL1/unitree_rl_mjlab_go2w 的资产配置](https://github.com/ZhongL1/unitree_rl_mjlab_go2w/blob/fe0deeaef2e6e579db63b782f1082b5d2b4ed071/mjlab/asset_zoo/robots/unitree_go2w/go2w_constants.py)，固定参考提交 `fe0deeaef2e6e579db63b782f1082b5d2b4ed071`：出生高度 0.40 m，右髋 +0.1 rad、左髋 -0.1 rad，大腿 0.9 rad、小腿 -1.8 rad，轮角和初始关节速度为零。髋/大腿 KP/KD 为 20/1、力矩上限 23.5 Nm；小腿为 40/2、45 Nm；轮速度增益为 2、力矩上限 45 Nm。髋/大腿 armature 为 0.01，小腿为 0.02，轮子现按用户配置改为 0.0，执行器 frictionloss 为 0。2026-10-24 接触分配改为与本仓库 G1 对应：非轮碰撞体 `condim=1、priority=0`，四轮 `condim=3、priority=1`；摩擦继承 XML 并按任务随机化，自碰撞按用户要求开启。此前物理几何曾与参考对齐，当前默认将四个轮碰撞几何改为圆柱，另提供原始 mesh 版本；来源和接口适配差异记录在 `src/assets/robots/unitree_go2w/SOURCE.md`。这些模型调整本身不能视为 NaN 修复。
 
 轮子现直接配置 `BuiltinVelocityActuatorCfg(target_names_expr=WHEEL_JOINTS, damping=2.0, effort_limit=45.0, armature=0.0, frictionloss=0.0)`。新 mjlab 原生速度执行器已支持连续关节，自动设置 `inheritrange=0.0`、`ctrllimited=False`；旧 1.2.0 环境使用的 `src/utils/mjlab_compat.py` 补丁已移除。显式 `frictionloss=0.0` 保持旧训练的有效摩擦值，避免新版默认继承 XML 摩擦而改变动力学。现按本仓库 G1 基准关闭动作裁剪，轮目标转速为 `20 * action` rad/s，20 不代表最大转速。armature 从 0.02 变为 0.0 是此前用户指定的模型调整，本次版本升级没有再改变它。
 
@@ -120,6 +120,18 @@ python -m unittest discover -s tests -v
 ```
 
 固定后端通过依赖安装，不需要 PYTHONPATH、容量参数或手动补丁。出生净空、求解器收敛、NaN 转储和碰撞回归保留在 `tests/`。
+
+### 选择轮子碰撞模型
+
+在 `src/assets/robots/unitree_go2w/go2w_constants.py` 中修改一行：
+
+```python
+GO2W_XML = GO2W_CYLINDER_XML  # 默认圆柱，半径 86 mm、全宽 45 mm
+# 或替换为：
+GO2W_XML = GO2W_MESH_XML      # 原 wheel.stl 的碰撞凸包，轴向宽度约 51.815 mm
+```
+
+两种模型的轮子 margin 都为 0；共用机身、质量惯量、控制和奖励。修改后重新启动训练或回放，全部六个 Go2W 任务都会使用选定模型，无需 CLI 参数。mesh 保留原始宽度，因此与 45 mm 圆柱的对比同时包含外形与宽度差异。
 
 ### 推荐：直接训练 v2
 
@@ -300,7 +312,7 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Step14-Up \
 
 ### 使用 ONNX 交互检查边界
 
-当前四轮碰撞体半径均为 86 mm、全宽 45 mm（XML 的第二个 size 值为半宽 `0.0225`）；圆柱中心与轴向仍根据原有 STL 的包围盒和轮关节轴对齐。此次仅从 51.814914 mm 缩窄到 45 mm，每侧收进约 3.407457 mm，轮心、质量、惯量与控制参数不变；宽度对照基线为 `4699c76`。最初纯圆柱替换提交为 `ea0e9a8`，圆柱前版本为 `6ff9526`，之后又进行了上述 G1 通用设置对齐。形状 A/B 应在同一套训练配置下比较，不能将前后多项调整一起归因于圆柱。其他开源仓库的形状和参数见[轮足接触配置调研](wheeled_contact_survey_zh.md)。
+默认圆柱版本的四轮碰撞体半径均为 86 mm、全宽 45 mm（XML 的第二个 size 值为半宽 `0.0225`）；圆柱中心与轴向仍根据原有 STL 的包围盒和轮关节轴对齐。此次仅从 51.814914 mm 缩窄到 45 mm，每侧收进约 3.407457 mm，轮心、质量、惯量与控制参数不变；宽度对照基线为 `4699c76`。最初纯圆柱替换提交为 `ea0e9a8`，圆柱前版本为 `6ff9526`，之后又进行了上述 G1 通用设置对齐。形状 A/B 应在同一套训练配置下比较，不能将前后多项调整一起归因于圆柱。其他开源仓库的形状和参数见[轮足接触配置调研](wheeled_contact_survey_zh.md)。
 
 ```bash
 python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \

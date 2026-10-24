@@ -3,6 +3,7 @@
 from pathlib import Path
 import unittest
 
+import mujoco
 import mujoco_warp as mjw
 import numpy as np
 
@@ -10,6 +11,15 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg
 
 import src.tasks  # noqa: F401
+from src.assets.robots.unitree_go2w.go2w_constants import GO2W_CYLINDER_XML, WHEEL_GEOMS
+
+
+def historical_margin_spec():
+  """The frozen limit fixtures were recorded with 1 mm wheel margins."""
+  spec = mujoco.MjSpec.from_file(str(GO2W_CYLINDER_XML))
+  for name in WHEEL_GEOMS:
+    spec.geom(name).margin = .001
+  return spec
 
 
 class SolverConvergenceTests(unittest.TestCase):
@@ -18,6 +28,7 @@ class SolverConvergenceTests(unittest.TestCase):
     cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
     cfg.seed = 42
     cfg.scene.num_envs = 1
+    cfg.scene.entities["robot"].spec_fn = historical_margin_spec
     cls.env = ManagerBasedRlEnv(cfg, device="cpu")
     cls.env.reset()
 
@@ -25,8 +36,8 @@ class SolverConvergenceTests(unittest.TestCase):
   def tearDownClass(cls):
     cls.env.close()
 
-  def replay(self, case, iterations, ls_iterations):
-    sim = self.env.sim
+  def replay(self, case, iterations, ls_iterations, env=None):
+    sim = (env or self.env).sim
     sim.wp_model.opt.iterations = iterations
     sim.wp_model.opt.ls_iterations = ls_iterations
     with np.load(Path(__file__).parent / "fixtures" / f"go2w_{case}_limit.npz",
@@ -56,6 +67,22 @@ class SolverConvergenceTests(unittest.TestCase):
         self.assertTrue(np.isfinite(qacc).all())
     warning_bits = int(mjw.OverflowType.ITERATIONS | mjw.OverflowType.LS_ITERATIONS)
     self.assertEqual(self.env.sim.wp_model.opt.warn_overflow & warning_bits, warning_bits)
+
+  def test_zero_margin_training_profile_converges_on_the_captured_inputs(self):
+    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
+    cfg.seed, cfg.scene.num_envs = 42, 1
+    env = ManagerBasedRlEnv(cfg, device="cpu")
+    try:
+      env.reset()
+      for case in ("linesearch", "solver"):
+        actual, qacc = self.replay(case, cfg.sim.mujoco.iterations, cfg.sim.mujoco.ls_iterations, env)
+        reference, reference_qacc = self.replay(case, 100, 200, env)
+        self.assertTrue(np.all(actual == 0), actual)
+        self.assertTrue(np.all(reference == 0), reference)
+        self.assertTrue(np.isfinite(qacc).all())
+        np.testing.assert_allclose(qacc, reference_qacc, rtol=1e-6, atol=1e-5)
+    finally:
+      env.close()
 
 
 if __name__ == "__main__":

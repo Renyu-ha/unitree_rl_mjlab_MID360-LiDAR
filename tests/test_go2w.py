@@ -22,8 +22,10 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 from mjlab.utils.spec import non_default_option_fields
 
 import src.tasks  # noqa: F401 -- register repository tasks
+from src.assets.robots.unitree_go2w import go2w_constants
 from src.assets.robots.unitree_go2w.go2w_constants import (
-  GO2W_XML, LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg, get_spec,
+  GO2W_XML, GO2W_CYLINDER_XML, GO2W_MESH_XML, GO2W_COMMON_XML,
+  LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg, get_spec,
 )
 from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
 from src.tasks.velocity.mdp.wheel_rewards import wheel_spin_contact, wheel_stand_still
@@ -33,22 +35,24 @@ from src.tasks.velocity.config.go2w import env_cfgs as go2w_env_cfgs
 class Go2WTests(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
-    cls.robot = Entity(get_go2w_robot_cfg())
+    with patch.object(go2w_constants, "GO2W_XML", GO2W_CYLINDER_XML):
+      cls.robot = Entity(get_go2w_robot_cfg())
     cls.model = cls.robot.spec.compile()
 
-  def test_final_xml_is_self_contained_without_unused_assets(self):
+  def test_static_variants_share_one_body_and_all_used_assets(self):
     folder = GO2W_XML.parent
-    root = ET.parse(GO2W_XML).getroot()
+    root = ET.parse(GO2W_COMMON_XML).getroot()
     meshdir = Path(root.find("compiler").get("meshdir", ""))
     mesh_paths = [(meshdir / mesh.get("file")).as_posix() for mesh in root.findall("asset/mesh")]
     self.assertEqual(len(mesh_paths), 14)
     self.assertTrue(all(Path(path).parent == Path("assets") for path in mesh_paths))
     self.assertEqual({(folder / path).name for path in mesh_paths}, {path.name for path in (folder / "assets").iterdir()})
     self.assertEqual({Path(path).stem for path in mesh_paths}, {geom.get("mesh") for geom in root.findall(".//worldbody//geom") if geom.get("mesh")})
-    # Loading the active XML itself must work without the other robot folders
-    # or the asset injection performed by Entity/get_spec().
-    standalone = mujoco.MjModel.from_xml_path(str(GO2W_XML))
-    self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 3))
+    # Both entries load their shared body/assets through native XML includes.
+    for entry in (GO2W_CYLINDER_XML, GO2W_MESH_XML):
+      self.assertEqual(ET.parse(entry).getroot().find("include").get("file"), GO2W_COMMON_XML.name)
+      standalone = mujoco.MjModel.from_xml_path(str(entry))
+      self.assertEqual((standalone.nq, standalone.nv, standalone.nmesh, standalone.nsensor), (23, 22, 14, 3))
 
   def test_loader_does_not_modify_final_xml_definitions(self):
     before = GO2W_XML.read_bytes()
@@ -105,7 +109,7 @@ class Go2WTests(unittest.TestCase):
         self.assertEqual(geom.margin[0], 0.0, geom.name)
         self.assertEqual(geom.friction[0], 1.0, geom.name)
     for leg in ("FL", "FR", "RL", "RR"):
-      self.assertAlmostEqual(model.geom(f"{leg}_wheel_link_collision").margin[0], 0.001)
+      self.assertEqual(model.geom(f"{leg}_wheel_link_collision").margin[0], 0.0)
     # Native compilation alone missed the 3.16 box-margin limitation. Check the
     # actual Warp import with a terrain box and both engine defaults enabled.
     wp.init()
@@ -221,7 +225,7 @@ class Go2WTests(unittest.TestCase):
           self.assertEqual(int(geom.priority[0]), 1 if wheel else 0)
           self.assertEqual(int(geom.contype[0]), 1)
           self.assertEqual(int(geom.conaffinity[0]), 1)
-          self.assertAlmostEqual(geom.margin[0], 0.001 if wheel else 0.0)
+          self.assertEqual(geom.margin[0], 0.0)
           if "wheel_link" in geom.name:
             self.assertEqual(geom.friction.tolist(), [0.8, 0.02, 0.01])
           else:
@@ -289,8 +293,52 @@ class Go2WTests(unittest.TestCase):
         self.assertAlmostEqual(model.body_mass[body_id], 0.98)
         np.testing.assert_array_equal(model.body_inertia[body_id], [0.003, 0.0016, 0.0016])
 
+  def test_mesh_wheels_match_original_visual_geometry_and_preserve_dynamics(self):
+    with patch.object(go2w_constants, "GO2W_XML", GO2W_MESH_XML):
+      mesh = Entity(get_go2w_robot_cfg()).spec.compile()
+    cylinder = self.model
+    self.assertEqual((mesh.nq, mesh.nv, mesh.nu, mesh.nmesh), (23, 22, 16, 14))
+    for field in (
+      "body_pos", "body_quat", "body_ipos", "body_iquat", "body_mass", "body_inertia",
+      "jnt_type", "jnt_axis", "jnt_pos", "jnt_range", "jnt_limited", "key_qpos",
+      "dof_armature", "dof_damping", "dof_frictionloss",
+      "actuator_gainprm", "actuator_biasprm", "actuator_forcerange", "actuator_ctrllimited",
+      "geom_friction", "geom_condim", "geom_priority", "geom_margin",
+      "geom_contype", "geom_conaffinity", "site_pos", "site_size", "mesh_vert", "mesh_face",
+    ):
+      with self.subTest(field=field):
+        np.testing.assert_array_equal(getattr(mesh, field), getattr(cylinder, field))
+    wheels = {mesh.geom(f"{leg}_wheel_link_collision").id for leg in ("FL", "FR", "RL", "RR")}
+    others = [index for index in range(mesh.ngeom) if index not in wheels]
+    for field in ("geom_type", "geom_size", "geom_pos", "geom_quat", "geom_dataid"):
+      np.testing.assert_array_equal(getattr(mesh, field)[others], getattr(cylinder, field)[others])
+    for wheel_id in wheels:
+      wheel = mesh.geom(wheel_id)
+      self.assertEqual(wheel.type[0], mujoco.mjtGeom.mjGEOM_MESH)
+      visual_ids = [i for i in range(mesh.ngeom) if mesh.geom_bodyid[i] == wheel.bodyid[0]
+                    and mesh.geom_group[i] == 2]
+      self.assertEqual(len(visual_ids), 1)
+      visual = mesh.geom(visual_ids[0])
+      np.testing.assert_array_equal(wheel.dataid, visual.dataid)
+      np.testing.assert_array_equal(wheel.pos, visual.pos)
+      np.testing.assert_array_equal(wheel.quat, visual.quat)
+      self.assertEqual(wheel.margin[0], 0)
+
+  def test_xml_path_selection_applies_to_every_go2w_task(self):
+    for path, expected in ((GO2W_CYLINDER_XML, mujoco.mjtGeom.mjGEOM_CYLINDER),
+                           (GO2W_MESH_XML, mujoco.mjtGeom.mjGEOM_MESH)):
+      with patch.object(go2w_constants, "GO2W_XML", path):
+        model = Entity(get_go2w_robot_cfg()).spec.compile()
+        self.assertEqual(model.geom("FL_wheel_link_collision").type[0], expected)
+        for task in list_tasks():
+          if task.startswith("Unitree-Go2W-"):
+            for play in (False, True):
+              robot = load_env_cfg(task, play=play).scene.entities["robot"]
+              self.assertIs(robot.spec_fn, get_spec)
+    self.assertEqual(go2w_constants.GO2W_XML, GO2W_XML)
+
   def test_wheel_ground_contact_height_is_invariant_to_wheel_spin(self):
-    spec = get_spec()
+    spec = mujoco.MjSpec.from_file(str(GO2W_CYLINDER_XML))
     spec.worldbody.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=(1, 1, 0.1))
     model = spec.compile()
     wheel = model.geom("FL_wheel_link_collision")

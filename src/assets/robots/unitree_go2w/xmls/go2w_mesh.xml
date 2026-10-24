@@ -1,0 +1,15 @@
+<!-- Go2W with original wheel.stl collisions. Shared model source: ../SOURCE.md. -->
+<mujoco model="go2">
+  <default>
+    <default class="wheel_collision">
+      <geom group="3" margin="0" priority="1" condim="3" friction="0.8 0.02 0.01" />
+      <default class="wheel_left">
+        <geom type="mesh" mesh="wheel" pos="0 0 0" quat="0 1 0 0" />
+      </default>
+      <default class="wheel_right">
+        <geom type="mesh" mesh="wheel" pos="0 0 0" />
+      </default>
+    </default>
+  </default>
+  <include file="go2w_common.xml" />
+</mujoco>

@@ -69,11 +69,13 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 v2/finetune/Step14 have compatible observation shapes; Rough/v1 have a different history length. Backend fixes can change collision results, so resumed trajectories need not match the old backend. ONNX play uses ONNX's ReferenceEvaluator without an extra ONNX Runtime installation. Existing robot tasks and deployment functionality are retained.
 
+Go2W has two static wheel collision entries: default `xmls/go2w.xml` uses cylinders of radius 86 mm and full width 45 mm; `xmls/go2w_mesh.xml` uses the original `wheel.stl` convex hull, retaining its approximately 51.815 mm axial width. Both share the body/assets/sensors in `go2w_common.xml` and use zero wheel margin. In `src/assets/robots/unitree_go2w/go2w_constants.py`, change `GO2W_XML = GO2W_CYLINDER_XML` to `GO2W_XML = GO2W_MESH_XML` and restart train/play. There is no CLI switch; control and reward settings are shared.
+
 ## Training guards
 
 All Go2W train/play resets end with terrain clearance: current joint pose and orientation, conservative geom bounds and the actual terrain envelope determine the required upward correction, with 5 mm plus collision margins. Nominal root height remains 0.4 m. Current planes, stairs, slopes, rough and wave terrains are covered; overlapping heightfield cells use all vertices. Unsupported tilted plane/heightfield configurations fail explicitly. This protects reset placement, not all subsequent dynamic motion.
 
-Shared velocity tasks retain solver/linesearch budgets 50/100. Captured states that exhausted 10/20 converge with the current budget and match the 100/200 reference at the same tolerance. The solver still stops early. XML `cone/impratio` conflicts were resolved by using the scene's existing `pyramidal/1` values as the single source. Non-wheel Go2W geoms have zero margin and `condim=1, priority=0`; wheels retain 1 mm margin and `condim=3, priority=1`.
+Shared velocity tasks retain solver/linesearch budgets 50/100. Captured states that exhausted 10/20 converge with the current budget and match the 100/200 reference at the same tolerance. The solver still stops early. XML `cone/impratio` conflicts were resolved by using the scene's existing `pyramidal/1` values as the single source. All Go2W collision geoms have zero margin; non-wheel geoms use `condim=1, priority=0`, and wheels use `condim=3, priority=1`.
 
 NaN capture atomically writes essential data before optional diagnostics. Empty tendon fields are skipped; optional reads, writes or latest-copy failures preserve the core archive. Keep NPZ/JSON/MJB together:
 
@@ -99,6 +101,6 @@ Project regressions retain full-task NaN injection and save-failure handling, fr
 
 On the original RTX 4090 NaN input, the combined fixes preserve contacts and finite forward/step results; all three upstream GPU regressions pass. The contact position still differs from native MuJoCo by 1.364 mm, exceeding the old diagnostic tool's arbitrary 1 mm threshold, so its overall `passed:false` must not be described as a full pass. A separate EPA snapshot matched the 256 reference at capacities 30/64/128, but capacity 30 later overflowed in training. The user has not reported warnings in the current capacity-64 trial.
 
-After cleanup, local CPU validation passed 65 project regressions, three upstream algorithm regressions and dependency checks. The normal entry point completed two PPO iterations with 32 environments, checkpoint/ONNX export and one resumed iteration. Checkpoint and ONNX play each completed 16 control steps with finite actions, observations and rewards. Original NaN input replay also completed. A baseline backend environment installed the pinned fork Git commit with one `pip install -e .`.
+Current CPU validation passes 69 project regressions, including zero margins, both wheel models and terrain clearance. Each model completed 32 environments, 64 rollout control steps, two PPO updates, checkpoint/ONNX export, and 16 playback control steps each for checkpoint and ONNX, with finite actions, observations and rewards. Packaging includes both entry XMLs and the shared body. Earlier checks passed three upstream algorithm regressions, dependency consistency, normal-entry resume and original NaN input replay. A baseline backend environment installed the pinned fork Git commit with one `pip install -e .`.
 
 Frozen-state results and short CPU runs do not prove long-run GPU stability; continue observing training on the target 4090. See the [Go2W guide](go2w_perceptive_zh.md) for task and perception details.
