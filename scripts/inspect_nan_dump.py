@@ -54,6 +54,9 @@ def recorded_summary(archive):
     "versions": metadata.get("versions"),
     "dumped_env_ids": metadata.get("dumped_env_ids"),
     "nonfinite_fields": metadata.get("nonfinite_fields"),
+    "capture_status": metadata.get("capture_status"),
+    "capture_errors": metadata.get("capture_errors"),
+    "skipped_model_fields": metadata.get("skipped_model_fields"),
     "num_frames": len(keys), "invalid_stored_state_keys": invalid,
     "fields": fields,
     "note": metadata.get("note", "Legacy pre-step history only. The failure result, "

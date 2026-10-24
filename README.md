@@ -21,7 +21,7 @@
 
 支持机器人：**Go2、Go2W（轮腿训练）、A2、As2、G1（29DOF）、G1-23DOF、H1\_2、H2、R1**
 
-本分支 `feat/mjlab-main-conda-3-16` 对齐截至 2026-10-23 的 mjlab 最新主线 `8bb2bc9e`，使用上游声明的 MuJoCo / mujoco-warp **3.16.0**、Warp **1.18.0**。使用 **Conda + pip** 安装，核心版本通过 pip constraints 固定，安装及 GPU 回归命令见 [安装说明](doc/setup_zh.md)。
+本分支 `feat/mjlab-main-conda-3-16` 对齐截至 2026-10-23 的 mjlab 最新主线 `8bb2bc9e`，使用上游声明的 MuJoCo / mujoco-warp **3.16.0**、Warp **1.18.0**。激活 Python 环境后，只需 `pip install -e .`；核心版本已在项目依赖中固定，安装及 GPU 回归命令见 [安装说明](doc/setup_zh.md)。
 
 ### Go2W 感知训练迁移
 
@@ -52,11 +52,10 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 --env.scene.num-envs=40
 git clone --recurse-submodules -b feat/mjlab-main-conda-3-16 https://github.com/Renyu-ha/unitree_rl_mjlab_MID360-LiDAR.git
 cd unitree_rl_mjlab_MID360-LiDAR
 
-# 创建 Conda 环境，再安装 PyTorch 和项目依赖
+# 创建 Conda 环境，一次安装项目及全部 Python 依赖
 conda env create -f environment.yml
 conda activate unitree_mjlab_main
-python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
+pip install -e .
 ```
 
 ---

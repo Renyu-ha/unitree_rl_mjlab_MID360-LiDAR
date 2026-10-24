@@ -9,10 +9,13 @@ from unittest.mock import Mock, patch
 
 import mujoco
 import numpy as np
+import torch
 from mjlab.sim import Simulation, SimulationCfg
+from mjlab.envs.mdp.dr.body import body_com_offset
 
 from scripts.inspect_nan_dump import recorded_summary
 from src.utils.nan_capture import PhysicsNanError, install_nan_capture
+from src.utils import nan_capture
 from src.utils.nan_viewer import PhysicsNanDumpViewer
 
 
@@ -111,6 +114,152 @@ class NanCaptureTests(unittest.TestCase):
     original = sim.forward
     install_nan_capture(sim)
     self.assertEqual(sim.forward, original)
+
+  def test_empty_tendon_fields_from_com_randomization_do_not_discard_failure(self):
+    sim = self.sim
+    # COM randomization registers derived tendon fields even on a robot with
+    # no tendons, exactly as the Go2W training environment does.
+    sim.expand_model_fields(body_com_offset.model_fields)
+
+    def invalid_forward():
+      sim.data.sensordata[1, 0] = float("nan")
+
+    sim.forward = invalid_forward
+    guard = install_nan_capture(sim)
+    with self.assertRaisesRegex(PhysicsNanError, "after_forward"):
+      sim.forward()
+    with self.load_dump(guard) as archive:
+      metadata = json.loads(archive["metadata_json"].item())
+      self.assertEqual(metadata["capture_status"], "complete")
+      self.assertEqual(metadata["dumped_env_ids"], [1])
+      self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+      self.assertIn("model_body_ipos", archive)
+      for name in ("tendon_length0", "tendon_invweight0"):
+        self.assertIn(name, metadata["requested_model_fields"])
+        self.assertIn(name, metadata["skipped_model_fields"])
+        self.assertNotIn(name, metadata["randomized_model_fields"])
+        self.assertNotIn(f"model_{name}", archive)
+
+  def test_core_archive_survives_optional_model_read_error(self):
+    sim = self.sim
+    sim.expand_model_fields(("body_mass", "geom_friction"))
+    original_tensor = nan_capture._tensor
+    saw_core_archive = []
+
+    def unavailable_model_field(data, name):
+      if data is sim.model and name == "body_mass":
+        # The essential data must already exist on disk when optional
+        # diagnostics are first accessed, including before an extraction error.
+        paths = list(Path(self.directory.name).glob("nan_dump_*.npz"))
+        self.assertEqual(len(paths), 1)
+        with np.load(paths[0], allow_pickle=False) as archive:
+          metadata = json.loads(archive["metadata_json"].item())
+          saw_core_archive.append(metadata["capture_status"])
+          self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+        raise RuntimeError("optional model read failed")
+      return original_tensor(data, name)
+
+    def invalid_forward():
+      sim.data.sensordata[0, 0] = float("nan")
+
+    sim.forward = invalid_forward
+    guard = install_nan_capture(sim)
+    with patch.object(nan_capture, "_tensor", side_effect=unavailable_model_field):
+      with self.assertRaisesRegex(PhysicsNanError, "after_forward"):
+        sim.forward()
+    self.assertEqual(saw_core_archive, ["core_saved"])
+    with self.load_dump(guard) as archive:
+      metadata = json.loads(archive["metadata_json"].item())
+      self.assertEqual(metadata["capture_status"], "partial")
+      self.assertIn("optional model read failed", metadata["capture_errors"]["model.body_mass"])
+      summary = recorded_summary(archive)
+      self.assertEqual(summary["capture_status"], "partial")
+      self.assertEqual(summary["capture_errors"], metadata["capture_errors"])
+      self.assertIn("model_geom_friction", archive)
+      self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+
+  def test_latest_copy_failure_does_not_mask_saved_physics_failure(self):
+    sim = self.sim
+
+    def invalid_forward():
+      sim.data.sensordata[0, 0] = float("nan")
+
+    sim.forward = invalid_forward
+    guard = install_nan_capture(sim)
+    with patch.object(nan_capture.shutil, "copyfile", side_effect=OSError("latest copy failed")):
+      with self.assertRaisesRegex(PhysicsNanError, "after_forward"):
+        sim.forward()
+    with self.load_dump(guard) as archive:
+      self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+
+  def test_failed_archive_enrichment_keeps_initial_core_readable(self):
+    sim = self.sim
+    original_save = nan_capture.np.savez_compressed
+    calls = []
+
+    def fail_second_write(path, **payload):
+      calls.append(path)
+      if len(calls) == 2:
+        Path(path).write_bytes(b"interrupted archive write")
+        raise OSError("archive enrichment failed")
+      original_save(path, **payload)
+
+    def invalid_forward():
+      sim.data.sensordata[0, 0] = float("nan")
+
+    sim.forward = invalid_forward
+    guard = install_nan_capture(sim)
+    with patch.object(nan_capture.np, "savez_compressed", side_effect=fail_second_write):
+      with self.assertRaisesRegex(PhysicsNanError, "after_forward"):
+        sim.forward()
+    self.assertEqual(len(calls), 2)
+    with self.load_dump(guard) as archive:
+      self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+      metadata = json.loads(archive["metadata_json"].item())
+      self.assertEqual(metadata["capture_status"], "core_saved")
+    metadata = json.loads(guard.dump_path.with_suffix(".json").read_text(encoding="utf-8"))
+    self.assertIn("archive enrichment failed", metadata["capture_errors"]["archive_enrichment"])
+
+  def test_go2w_training_randomization_can_dump_after_step_failure(self):
+    import src.tasks  # noqa: F401
+    from mjlab.envs import ManagerBasedRlEnv
+    from mjlab.tasks.registry import load_env_cfg
+
+    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
+    cfg.scene.num_envs = 2
+    cfg.scene.terrain.terrain_generator.num_rows = 1
+    cfg.scene.terrain.terrain_generator.num_cols = 2
+    cfg.scene.terrain.max_init_terrain_level = 0
+    cfg.sim.nan_guard.enabled = True
+    cfg.sim.nan_guard.output_dir = self.directory.name
+    env = ManagerBasedRlEnv(cfg, device="cpu")
+    try:
+      guard = install_nan_capture(env.sim)
+      env.reset()
+      self.assertIn("tendon_length0", env.sim.expanded_fields)
+      import mujoco_warp
+      step = mujoco_warp.step
+
+      def invalid_step(*args, **kwargs):
+        step(*args, **kwargs)
+        env.sim.data.sensordata[1, 0] = float("nan")
+
+      with patch("mjlab.sim.sim.mjwarp.step", side_effect=invalid_step):
+        with self.assertRaisesRegex(PhysicsNanError, "after_step"):
+          env.step(torch.zeros(2, 16))
+      with self.load_dump(guard) as archive:
+        metadata = json.loads(archive["metadata_json"].item())
+        self.assertEqual(metadata["failure_stage"], "after_step")
+        self.assertEqual(metadata["capture_status"], "complete")
+        self.assertEqual(metadata["capture_errors"], {})
+        self.assertIn("tendon_length0", metadata["skipped_model_fields"])
+        self.assertIn("tendon_invweight0", metadata["skipped_model_fields"])
+        self.assertIn("model_geom_friction", archive)
+        self.assertIn("model_body_ipos", archive)
+        self.assertTrue(np.isnan(archive["failure_sensordata"][0, 0]))
+        self.assertTrue(np.isfinite(archive["failure_qpos"]).all())
+    finally:
+      env.close()
 
   def test_viewer_keeps_raw_nan_but_renders_same_world_predecessor(self):
     viewer = PhysicsNanDumpViewer.__new__(PhysicsNanDumpViewer)

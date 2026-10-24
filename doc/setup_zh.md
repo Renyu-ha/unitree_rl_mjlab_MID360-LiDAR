@@ -8,10 +8,10 @@
 | MuJoCo / mujoco-warp | 3.16.0 / 3.16.0，与主线 ~=3.16.0 一致 |
 | Warp | 1.18.0，与该主线 uv.lock 一致，满足 >=1.15.0 |
 | RSL-RL | 5.5.1，由固定 mjlab 提交声明 |
-| PyTorch | 2.14.1，下面默认选择 CUDA 12.6 包，满足主线 >=2.14.0 |
+| PyTorch | 2.14.1，从 PyPI 安装适合当前平台的默认包，满足主线 >=2.14.0 |
 | Python | 推荐 3.11；项目支持 >=3.11,<3.14 |
 
-mjlab 源码通过标准 Python Git 依赖固定在 `pyproject.toml` 中，pip 可以直接识别。本分支使用 Conda 管理 Python 环境、pip 安装依赖，移除了之前的 uv 专用配置和 3.17 依赖覆盖。`requirements/constraints-mjlab-main.txt` 固定核心验证版本，均满足上游依赖声明；它不是所有间接依赖的完整锁文件。
+mjlab 源码及 MuJoCo、mujoco-warp、Warp、RSL-RL、PyTorch 的核心版本直接固定在 `pyproject.toml` 的标准依赖中，均满足上游声明。激活 Python 环境后，在仓库根目录执行 `pip install -e .` 即可安装项目及全部 Python 依赖，无需预装 PyTorch、额外包源、constraints 文件或 uv 命令。间接依赖仍由 pip 解析，核心版本固定不等于所有间接依赖的完整锁文件。
 
 上游 mjlab 自身使用 `uv_build` 作为 Python 构建后端，pip 会在隔离构建环境中自动安装它；用户无需安装或运行 uv 命令。
 
@@ -26,9 +26,7 @@ git clone --recurse-submodules -b feat/mjlab-main-conda-3-16 https://github.com/
 cd unitree_rl_mjlab_MID360-LiDAR
 conda env create -f environment.yml
 conda activate unitree_mjlab_main
-python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
-python -m pip check
+pip install -e .
 ```
 
 已有仓库先 `git fetch origin`，再 `git switch feat/mjlab-main-conda-3-16`。也可用以下命令代替 `conda env create`，自行选择环境名：
@@ -37,17 +35,17 @@ python -m pip check
 conda create -n unitree_mjlab_main python=3.11 pip -y
 ```
 
-安装需要 Git，以及访问 GitHub、PyPI、NVIDIA、Conda 和 PyTorch 软件包源。`--extra-index-url` 用于获得 NVIDIA 发布的 Warp 包。NVIDIA 驱动必须同时满足 Warp 1.18 与所选 PyTorch CUDA 包的要求；以前“驱动 >=550”的说明不能作为这套版本的支持保证。PyTorch cu126 包不改变 Warp 1.18 内部的 CUDA 运行要求。
+安装需要 Git，以及访问 GitHub 和 PyPI；创建 Conda 环境另需访问 Conda 包源。Warp 1.18.0 和 PyTorch 2.14.1 均直接从 PyPI 安装，无需 NVIDIA 额外包源。默认使用当前平台的 PyPI 包，不再强制 PyTorch cu126；环境内已有的同版本 CPU/CUDA 包可满足版本约束。NVIDIA 驱动仍须同时满足实际安装的 Warp 和 PyTorch 包的要求。
 
-Windows 或 Linux 仅做 CPU 检查时，将 PyTorch 安装命令改为：
+安装完成后可选检查依赖一致性：
 
 ```bash
-python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
+python -m pip check
 ```
 
-其余安装命令相同。后续命令都在 `conda activate unitree_mjlab_main` 后执行。不要在现有 3.5/3.17 训练环境中直接覆盖安装。
+CPU 检查和 GPU 训练使用相同的项目安装命令。后续命令都在 `conda activate unitree_mjlab_main` 后执行；旧版 3.5/3.17 的转储应保留对应旧环境回放。
 
-仓库当前 ONNX 回放使用 ONNX 自带的参考执行器，无需额外安装 ONNX Runtime。普通 `python -m pip install -e .` 同样能识别固定的 mjlab Git 源和 3.16 版本范围；使用上面的 constraints 可以保持核心版本与本次验证一致。
+仓库当前 ONNX 回放使用 ONNX 自带的参考执行器，无需额外安装 ONNX Runtime。
 
 ## 2. 先检查碰撞与完整任务
 
@@ -68,9 +66,9 @@ CPU 上将 `cuda:0` 改为 `cpu`。运行单元检查：
 python -m unittest discover -s tests -v
 ```
 
-本分支保留模型文件直接加载、显式碰撞属性、执行器摩擦默认值、命令部分重置接口及新版浏览器可视化适配。连续轮关节使用新 mjlab 的原生速度执行器。NaN 当步原始数据捕获功能也已保留。
+本分支保留模型文件直接加载、显式碰撞属性、执行器摩擦默认值、命令部分重置接口及新版浏览器可视化适配。连续轮关节使用新 mjlab 的原生速度执行器。NaN 当步原始数据先以原子写入保存核心转储，再补充接触、约束和随机化模型字段；空 tendon 字段会跳过，附加读取或保存失败不会覆盖核心转储和原始 NaN 异常。
 
-3.16 额外适配：MuJoCo-Warp 3.16 不支持 native CCD / MultiCCD 下非零 margin 的箱体-箱体碰撞。Go2W 最终 XML 中的机身和四个大腿箱体显式设置 `margin="0"`；轮子等其他形状仍保留 1 mm margin。保留引擎默认的 native CCD 和 MultiCCD，自碰撞、几何尺寸、摩擦及控制参数不变。这个调整会使这五个箱体的接触激活距离减少 1 mm。
+3.16 额外适配：MuJoCo-Warp 3.16 不支持 native CCD / MultiCCD 下非零 margin 的箱体-箱体碰撞。当前 Go2W 已进一步对齐 G1：所有非轮子碰撞体使用 `margin="0"`、`condim=1` 和基础滑动摩擦 `1`，轮子保留 1 mm margin 并使用 `condim=3, priority=1`。保留引擎默认的 native CCD 和 MultiCCD；具体接触调整见 [Go2W 模型来源](../src/assets/robots/unitree_go2w/SOURCE.md)。
 
 ## 3. Go2W 训练和可视化
 
@@ -108,7 +106,9 @@ python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2 \
 
 ## 4. 已知验证边界
 
-本次已实际新建独立 Conda 环境，按上述 pip 流程安装，`pip check` 通过。CPU 上通过 50 项测试（含原始错误接触姿态和带地面箱体的 Warp 模型加载）、64 步完整 Go2W 感知任务、2 轮 PPO、checkpoint 保存/加载、ONNX 导出与交互回放；实际训练入口也通过 NaN guard、Viser 和 W&B 离线日志检查。W&B 离线检查未向云端上传数据。
+2026-10-24 在全新 Windows Python 3.11 虚拟环境中，仅用 `pip install -e .` 完成安装，未预装 PyTorch、未使用额外包源或 constraints。该环境通过 `pip check`、56 项测试（包含完整 Go2W 任务注入 NaN、空 tendon 字段、附加读取/写入失败时保留故障转储）、64 步完整 Go2W 感知任务、2 轮 PPO、checkpoint 保存/加载和 ONNX 导出。原独立 Conda CPU 环境也通过相同的 56 项测试。
+
+此前独立 Conda 环境已通过交互回放，以及实际训练入口的 NaN guard、Viser 和 W&B 离线日志检查；W&B 离线检查未向云端上传数据。
 
 - 本地 CPU 验证不能代替训练机上的 CUDA 内核、多 GPU 和长期训练验证。
 - 固定碰撞姿态通过，并不意味着所有可能的碰撞姿态都已无误。GPU 上应重新运行同一检查。

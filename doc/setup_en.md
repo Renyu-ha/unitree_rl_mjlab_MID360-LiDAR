@@ -16,16 +16,18 @@ git clone --recurse-submodules -b feat/mjlab-main-conda-3-16 https://github.com/
 cd unitree_rl_mjlab_MID360-LiDAR
 conda env create -f environment.yml
 conda activate unitree_mjlab_main
-python -m pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -c requirements/constraints-mjlab-main.txt --extra-index-url https://pypi.nvidia.com -e .
-python -m pip check
+pip install -e .
 ```
 
-For CPU validation, replace the PyTorch index with
-`https://download.pytorch.org/whl/cpu`. The constraints file pins the core
-validation versions, rather than every transitive package. The standard Git
-dependency in `pyproject.toml` pins mjlab for pip as well. Upstream's `uv_build`
-build backend is installed automatically by pip in an isolated build environment.
+This single command installs PyTorch and all Python dependencies. The standard
+metadata in `pyproject.toml` pins the core versions and the exact mjlab Git
+commit. No constraints file, extra package index or separate PyTorch install is
+needed. PyTorch and Warp use the default PyPI wheels for the current platform;
+an already installed CPU/CUDA build of the same PyTorch version also satisfies
+the requirement. Transitive dependencies are resolved by pip. Upstream's
+`uv_build` backend is installed automatically in an isolated build environment.
+Git and access to GitHub and PyPI are required. After installation, optionally
+run `python -m pip check`.
 
 Run the following on the training GPU before starting a long run:
 
@@ -41,10 +43,18 @@ long-run training stability or multi-GPU correctness. See the
 compatibility details. The 3.17 comparison branch remains available as
 `feat/mjlab-latest-mujoco-warp-3-17`.
 
-The independent Conda CPU environment passed `pip check`, 50 tests, a 64-step
-Go2W perceptive rollout, two PPO iterations, checkpoint save/load, ONNX export
-and interactive playback. The normal training entry also passed with NaN guard,
-Viser and offline W&B logging. Go2W's five box collision geoms use zero margin
-for MuJoCo-Warp 3.16 native CCD support; wheel margins remain 1 mm. GPU and
-long-run stability still require validation on the training machine.
+On 2026-10-24 a fresh Windows Python 3.11 environment installed successfully
+with only `pip install -e .`, without preinstalling PyTorch or supplying extra
+indexes or constraints. It passed `pip check`, all 56 tests, a 64-step Go2W
+perceptive rollout, two PPO iterations, checkpoint save/load and ONNX export.
+The tests include a full Go2W NaN injection and preservation of the core dump
+when tendon fields are empty or optional diagnostics fail. The existing Conda
+CPU environment also passed all 56 tests. Earlier checks covered interactive
+playback and the normal training entry with NaN guard, Viser and offline W&B
+logging. All Go2W non-wheel collision geoms now use zero
+margin, condim 1 and base sliding friction 1, matching G1; wheels retain 1 mm
+margin and use condim 3, priority 1. NaN capture saves the core archive before
+optional diagnostics, skips empty tendon fields and preserves the original
+physics error if optional reads or writes fail. GPU and long-run stability
+still require validation on the training machine.
 
