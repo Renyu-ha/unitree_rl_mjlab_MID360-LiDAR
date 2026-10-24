@@ -2,7 +2,7 @@
 
 Frozen box poses are from mujoco_warp 3.16 collision_gjk_test.test_box_box_horizon
 (Apache-2.0). Its 13-edge case lets us test capture/replay without pretending it
-reproduces the user's as-yet uncaptured 24-edge GPU failure.
+reproduces the user's reported 24-edge GPU failure.
 """
 
 import json
@@ -17,7 +17,7 @@ import numpy as np
 from mjlab.envs.mdp.dr.body import body_com_offset
 from mjlab.sim import Simulation, SimulationCfg
 
-from scripts.replay_epa_dump import replay_epa_dump, temporary_epa_horizon
+from scripts.replay_epa_dump import compare_contacts, replay_epa_dump, temporary_epa_horizon
 from src.utils.epa_capture import EpaCaptureError, install_epa_capture
 
 
@@ -95,6 +95,47 @@ class EpaCaptureTests(unittest.TestCase):
       self.assertIn("geom_xpos", archive)
     with self.assertRaisesRegex(ValueError, "incomplete"):
       replay_epa_dump(guard.dump_path)
+
+
+class EpaReplayVerdictTests(unittest.TestCase):
+  def test_reported_seven_contacts_can_pass_without_contact_count_increase(self):
+    # Regression for the GPU report: 24 overflows; 30 and 256 both produce the
+    # same seven sane contacts. Mock only collision execution, not the verdict.
+    contacts = {
+      "worldid": np.zeros(7, dtype=np.int32),
+      "geom": np.tile([0, 1], (7, 1)),
+      "pos": np.arange(21, dtype=np.float32).reshape(7, 3) * .001,
+      "dist": np.full(7, -.001, dtype=np.float32),
+      "frame": np.tile(np.eye(3, dtype=np.float32), (7, 1, 1)),
+    }
+    metadata = {"format": "epa_collision_snapshot_v1", "capture_status": "complete",
+                "versions": {}, "epa_horizon": 24, "model_file": "unused.mjb",
+                "device": "cuda:0", "dumped_env_ids": [3569], "geom_names": ["terrain", "wheel"]}
+
+    def run(*args):
+      capacity = args[-1]
+      overflow = capacity == 24
+      return ({"capacity": capacity, "overflow": [256 if overflow else 0],
+               "epa_overflow": overflow, "other_overflow": False,
+               "contacts": 7, "contact_sanity": True}, contacts)
+
+    with TemporaryDirectory() as directory:
+      path = Path(directory, "epa.npz")
+      np.savez(path, metadata_json=json.dumps(metadata), geom_xpos=np.zeros((1, 2, 3)),
+               geom_xmat=np.tile(np.eye(3), (1, 2, 1, 1)))
+      with patch("scripts.replay_epa_dump._run_collision", side_effect=run):
+        report = replay_epa_dump(path, capacities=(30, 256))
+      self.assertTrue(report["baseline_reproduced"])
+      self.assertTrue(report["passed"], report)
+      self.assertTrue(report["candidates"][0]["passed"])
+      self.assertEqual(report["recovered_geom_pairs"], [])
+      self.assertEqual(report["candidates"][0]["max_position_error_m"], 0)
+
+  def test_equal_counts_still_require_matching_contact_positions(self):
+    contacts = {"worldid": np.array([0]), "geom": np.array([[0, 1]]),
+                "pos": np.zeros((1, 3)), "dist": np.zeros(1), "frame": np.eye(3)[None]}
+    shifted = {**contacts, "pos": np.array([[0, 0, .02]])}
+    self.assertFalse(compare_contacts(shifted, contacts)["matches"])
 
 
 if __name__ == "__main__":

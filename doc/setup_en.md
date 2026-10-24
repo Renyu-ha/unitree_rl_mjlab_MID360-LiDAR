@@ -138,11 +138,38 @@ python scripts/replay_epa_dump.py <run>/epa_capture/rank_0/epa_dump_latest.npz -
 ```
 
 Replay must reproduce the original overflow before testing 64/128 against 256.
-A passing candidate restores contacts with finite, plausible positions/normals,
+A passing candidate produces nonempty contacts with finite, plausible positions/normals,
 zero overflow and agreement with the larger-capacity reference. This is evidence
 for one frozen state, not independent ground truth or long-run stability. The
+contact count need not increase, and `recovered_geom_pairs` may be empty. The
+reported GPU state passed these checks at 30/64/128: all seven contacts exactly
+matched the 256 reference. The earlier requirement for an increased contact count
+incorrectly reported `passed:false` and has been removed. The
 temporary private allocation override affects only replay, not installed files
 or training, and leaves warnings enabled. The adapter requires mujoco-warp 3.16.0
 and captured package versions. A controlled 5-edge overflow tests the capture
-chain; it does not reproduce the user's uncaptured 24-edge GPU case.
+chain; it does not reproduce the user's reported 24-edge GPU case.
+
+The separate `nan_dump_20261024_120617_484587` is world 1618, not the EPA
+snapshot's world 3569. Its GPU contact between the front-right wheel and box
+`terrain_196` is 61.87 m from the wheel center (bounding radius 0.0889 m), despite
+a recorded distance of only -0.0000188 m. Restoring the last finite input, saved
+controls, warmstart and randomized fields produces a valid wheel-side contact
+and finite results in both native MuJoCo and CPU Warp. Capacities 24/30/64 agree
+on CPU. The GPU contact error has not been reproduced locally, so neither its
+internal cause nor a fix through horizon capacity is established. Probe it on
+the training GPU with the MJB beside the NPZ:
+
+```bash
+python scripts/inspect_nan_dump.py <directory>/nan_dump_20261024_120617_484587.npz \
+  --recorded-inputs --device cuda:0 --output logs/nan_replay.json
+```
+
+This selects the last pre-operation input and preserves the recorded solver,
+controls, warmstart and randomized fields, rejecting incomplete captures. A
+single-world replay with recomputed transforms is not an exact GPU checkpoint.
+Subsequent NaN captures also save the original device `failure_geom_xpos`,
+`failure_geom_xmat` and `failure_overflow` as optional extras; extraction failures
+still preserve the core archive.
+The verdict fix and recorded-input probe passed all 68 CPU tests.
 

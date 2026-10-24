@@ -144,8 +144,11 @@ def replay_epa_dump(path, device="cpu", capacities=(64, 128, 256)):
   runs = [_run_collision(path.parent / metadata["model_file"], arrays, metadata, device, size)
           for size in ordered]
   baseline, reference = runs[0][0], runs[-1][0]
+  # An overflowing local query need not change the final contact count (e.g.
+  # heightfield prism contacts are reduced). Judge the actual contact data,
+  # rather than requiring more contacts than the baseline.
   reference_ok = (not reference["epa_overflow"] and not reference["other_overflow"]
-                  and reference["contact_sanity"] and reference["contacts"] > baseline["contacts"])
+                  and reference["contact_sanity"] and reference["contacts"] > 0)
   candidates = []
   for result, contacts in runs[1:-1]:
     comparison = compare_contacts(contacts, runs[-1][1]) if result["contact_sanity"] and reference["contact_sanity"] else {"matches": False}
@@ -170,7 +173,8 @@ def replay_epa_dump(path, device="cpu", capacities=(64, 128, 256)):
       for (world, a, b), count in recovered.items()],
     "passed": any(result["passed"] for result in candidates),
     "note": "Pass means this frozen collision reproduces the baseline overflow and a candidate "
-            "restores contacts consistent with the larger-capacity reference. It is not independent "
+            "clears overflow with sane, nonempty contacts consistent with the larger-capacity reference. "
+            "Contact counts need not increase; recovered_geom_pairs may be empty. It is not independent "
             "ground truth or proof of long-run training stability. A GPU-only failure may not reproduce on CPU.",
   }
 

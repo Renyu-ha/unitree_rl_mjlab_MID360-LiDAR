@@ -174,6 +174,7 @@ class PhysicsNanCapture:
       "note": "states_step_* use mjSTATE_PHYSICS; the final state is the original "
               "invalid result. failure_* are recorded device arrays, not CPU replay. "
               "MJB is the base model; model_* store selected randomized fields. "
+              "failure_geom_xpos/geom_xmat are original collision transforms. "
               "History counts step/forward calls, not only integration steps. "
               "This is a diagnostic capture, not a complete deterministic checkpoint.",
     }
@@ -202,6 +203,16 @@ class PhysicsNanCapture:
     # below preserves this first archive if a later write fails.
     write_archive()
     capture_optional("model_file", lambda: mujoco.mj_saveModel(model, str(model_path), None))
+
+    def capture_collision_inputs():
+      # qpos may already have been integrated or invalidated. Retain the
+      # actual device transforms used by collision, including GPU rounding.
+      for name in ("geom_xpos", "geom_xmat", "overflow"):
+        values = _tensor(data, name)
+        if values is not None:
+          save_fields("failure", {name: values})
+
+    capture_optional("collision_inputs", capture_collision_inputs)
 
     def capture_contacts():
       # Contacts are globally packed; select by worldid rather than nconmax.

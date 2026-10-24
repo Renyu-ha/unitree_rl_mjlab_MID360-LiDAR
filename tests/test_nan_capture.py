@@ -1,6 +1,8 @@
 """CPU regression tests for the exact failure/result distinction."""
 
 import json
+import contextlib
+import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -13,7 +15,7 @@ import torch
 from mjlab.sim import Simulation, SimulationCfg
 from mjlab.envs.mdp.dr.body import body_com_offset
 
-from scripts.inspect_nan_dump import recorded_summary
+from scripts.inspect_nan_dump import inspect, recorded_inputs, recorded_summary
 from src.utils.nan_capture import PhysicsNanError, install_nan_capture
 from src.utils import nan_capture
 from src.utils.nan_viewer import PhysicsNanDumpViewer
@@ -74,11 +76,30 @@ class NanCaptureTests(unittest.TestCase):
       np.testing.assert_equal(archive["inputs_step_000002_qacc_warmstart"], [[4.0]])
       self.assertEqual(archive["failure_contact_worldid"].tolist(), [1, 1])
       self.assertEqual(float(archive["failure_contact_dist"][0]), -1.0)
+      np.testing.assert_equal(archive["failure_geom_xpos"], sim.data.geom_xpos[1:2].numpy())
+      np.testing.assert_equal(archive["failure_geom_xmat"], sim.data.geom_xmat[1:2].numpy())
+      self.assertIn("failure_overflow", archive)
       self.assertEqual(float(archive["model_body_mass"][0, 1]), 3.0)
       self.assertEqual(recorded_summary(archive)["fields"]["failure_qpos"]["nonfinite_count"], 1)
+      inputs, fields = recorded_inputs(archive, keys[0], 0)
+      np.testing.assert_equal(inputs["ctrl"], [[2.5]])
+      np.testing.assert_equal(inputs["qacc_warmstart"], [[4.0]])
+      self.assertEqual(float(fields["body_mass"][0, 1]), 3.0)
+      with self.assertRaisesRegex(ValueError, "lacks recorded inputs"):
+        recorded_inputs(archive, keys[-1], 0)
     self.assertTrue(Path(self.directory.name, "nan_dump_latest.npz").is_file())
     self.assertTrue(Path(self.directory.name, "model_latest.mjb").is_file())
     self.assertTrue(guard.dump_path.with_suffix(".json").is_file())
+    args = SimpleNamespace(dump=guard.dump_path, model=None, device="cpu", frame=-1,
+                           summary_only=False, dump_index=0, wheel_margin=None,
+                           output=None, recorded_inputs=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+      report = inspect(args)
+    self.assertEqual(report["input_source"], "recorded")
+    self.assertEqual(report["state_key"], keys[0])
+    self.assertIn("body_mass", report["restored_model_fields"])
+    self.assertEqual(len(report["warp"]), 1)
+    self.assertTrue(report["warp"][0]["after_step"]["qvel"]["finite"])
 
   def test_forward_catches_sensor_failure_while_joint_angle_is_finite(self):
     sim = self.sim
