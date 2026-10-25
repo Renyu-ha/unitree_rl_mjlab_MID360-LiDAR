@@ -33,6 +33,12 @@ pip install -e .
 
 已有环境在更新当前分支后重新执行 `pip install -e .`，将替换原版后端。移除旧训练命令中的碰撞实验 `PYTHONPATH` 前缀和 `--epa-horizon`、`--capture-epa` 参数；这些临时接口已删除。训练、play 和 NaN 原始输入回放会检查实际后端版本和容量，并打印加载路径；训练同时写入 `params/collision.json`。
 
+RSL-RL只接受5.5.1。train/play/evaluate会校验实际版本和导入来源，拒绝重复安装或混用其他目录的RSL-RL子模块；训练将Python路径、包路径和关键源码SHA256写入 `params/rl_backend.json`，Go2W新checkpoint也保存这些记录。已记录的checkpoint版本或源码与当前环境不一致时拒绝加载；旧checkpoint缺少记录时会警告无法追溯原版本。可在当前激活环境中自行检查：
+
+```bash
+python -c "from src.utils.rl_backend import rl_backend_info; print(rl_backend_info())"
+```
+
 ## 固定后端的内容
 
 后端基于官方 MuJoCo-Warp v3.16.0，只回移两项上游修复，并固定 `MJ_MAX_EPAHORIZON=64`：
@@ -55,9 +61,9 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
   --env.observations.critic.nan-policy=error
 ```
 
-默认使用 GPU 0、本地 TensorBoard，日志位于 `logs/rsl_rl/go2w_perceptive/`。选择显卡可用 `--gpu-ids 0`；CPU 检查用 `--gpu-ids=None`。首次安装或更换后端后的首次运行可能编译 Warp 内核，后续复用缓存。
+默认使用GPU 0、W&B项目 `go2w_mid360`，模型保留本地，日志位于 `logs/rsl_rl/go2w_perceptive/`。纯本地日志追加 `--agent.logger=tensorboard`。选择显卡可用 `--gpu-ids 0`；CPU检查用 `--gpu-ids=None`。首次安装或更换后端后的首次运行可能编译Warp内核，后续复用缓存。
 
-需要 W&B 时追加 `--agent.logger=wandb --agent.wandb-project=go2w_mid360`，提前按自己的账号登录。实时查看追加 `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`，浏览器访问训练机的 8096 端口。可视化只同步选定环境，有额外同步开销。
+自定义W&B项目可追加 `--agent.wandb-project=项目名`，提前按自己的账号登录。实时查看追加 `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`，浏览器访问训练机的 8096 端口。可视化只同步选定环境，有额外同步开销。
 
 Viser 显示层会转换 MuJoCo 相机俯仰角的正负约定，避免负角度被解释为从地形下方仰视；native 和录像继续使用原相机配置。`play --start-paused=True` 也会先同步真实机器人姿态，无需点击 Step 才显示完整模型。普通 play 与边界检查共用此修复，训练实时查看也使用一致的角度转换；光照和材质保持上游默认。
 

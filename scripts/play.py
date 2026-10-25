@@ -19,6 +19,7 @@ from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer
 
 from src.utils.physics_backend import physics_backend_info
+from src.utils.rl_backend import rl_backend_info
 from src.utils.play_viewer import ViserPlayViewer
 
 
@@ -56,6 +57,8 @@ class PlayConfig:
 
 
 def run_play(task_id: str, cfg: PlayConfig):
+  rl_settings = rl_backend_info()
+  print(f"[INFO] RSL-RL {rl_settings['version']}: {rl_settings['package_source']}")
   backend = physics_backend_info()
   print(f"[INFO] MuJoCo-Warp {backend['mujoco_warp']}, EPA horizon {backend['epa_horizon']}")
   configure_torch_backends()

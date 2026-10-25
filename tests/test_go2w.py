@@ -424,7 +424,10 @@ class Go2WTests(unittest.TestCase):
     spin = cfg.rewards["wheel_spin_contact"]
     spin_sensor = next(s for s in cfg.scene.sensors if s.name == spin.params["sensor_name"])
     self.assertIs(spin_sensor, sensor)
-    self.assertEqual([s.name for s in cfg.scene.sensors], ["terrain_scan", "feet_ground_contact", "nonfoot_ground_touch", "self_collision"])
+    self.assertEqual([s.name for s in cfg.scene.sensors], [
+      "terrain_scan", "feet_ground_contact", "nonfoot_ground_touch", "self_collision",
+      "wheel_height_FL", "wheel_height_FR", "wheel_height_RL", "wheel_height_RR",
+    ])
     self.assertIsInstance(spin_sensor, ContactSensorCfg)
     self.assertTrue(spin_sensor.preserve_order)
     self.assertEqual(spin_sensor.primary.pattern, sensor.primary.pattern)
@@ -477,7 +480,7 @@ class Go2WTests(unittest.TestCase):
     self.assertAlmostEqual(offsets[:, 0].max().item(), 1.15, places=5)
     self.assertTrue(torch.all(directions[:, 2] == -1.0))
 
-  def test_generic_training_settings_match_corresponding_g1_tasks(self):
+  def test_shared_training_settings_and_explicit_go2w_overrides(self):
     pairs = (
       ("Unitree-Go2W-Flat", "Unitree-G1-Flat"),
       ("Unitree-Go2W-Rough", "Unitree-G1-Rough"),
@@ -540,44 +543,89 @@ class Go2WTests(unittest.TestCase):
               b.pop("func")
               a["params"].pop("asset_cfg", None)
               b["params"].pop("asset_cfg", None)
+              if group == "critic" or term == "actions":
+                self.assertIsNone(a["noise"])
+                b["noise"] = None
+              if term == "foot_height":
+                # Go2W axle height now uses per-wheel terrain rays; G1 keeps world Z.
+                self.assertIs(actual.observations[group].terms[term].func,
+                              go2w_env_cfgs.mdp.foot_height_above_terrain)
+                self.assertEqual(a["params"].pop("sensor_names"), (
+                  "wheel_height_FL", "wheel_height_FR", "wheel_height_RL", "wheel_height_RR",
+                ))
+                self.assertEqual(a["scale"], 5.0)
+                b["scale"] = 5.0
               self.assertEqual(a, b, (group, term))
           for event in actual.events.keys() & expected.events.keys():
             a, b = asdict(actual.events[event]), asdict(expected.events[event])
             a["params"].pop("asset_cfg", None)
             b["params"].pop("asset_cfg", None)
+            if event == "foot_friction" and "v2" in go2w_task:
+              self.assertEqual(a["params"]["ranges"], (0.6, 1.8))
+              b["params"]["ranges"] = (0.6, 1.8)
             self.assertEqual(a, b, event)
-          for reward in actual.rewards.keys() & expected.rewards.keys() - {"pose", "body_orientation_l2", "track_angular_velocity", "action_rate_l2"}:
+          tuned_rewards = {"pose", "body_orientation_l2", "track_angular_velocity",
+                           "action_rate_l2", "soft_landing", "stand_still", "joint_pos_limits"}
+          for reward in actual.rewards.keys() & expected.rewards.keys() - tuned_rewards:
             self.assertEqual(actual.rewards[reward].weight, expected.rewards[reward].weight, reward)
           action_rate_weight = -0.02 if "v2" in go2w_task else expected.rewards["action_rate_l2"].weight
           self.assertEqual(actual.rewards["action_rate_l2"].weight, action_rate_weight)
-          self.assertEqual(actual.rewards["pose"].weight, 0.5)
+          self.assertEqual(actual.rewards["pose"].weight, 0.75)
           self.assertEqual(actual.rewards["body_orientation_l2"].weight, -0.7)
           self.assertEqual(actual.rewards["track_angular_velocity"].params["std"], 0.5)
-          self.assertEqual(actual.rewards["track_angular_velocity"].weight, expected.rewards["track_angular_velocity"].weight)
+          perceptive = "Perceptive" in go2w_task
+          angular_weight = 1.15 if "StepUp" in go2w_task else (0.75 if perceptive else 1.0)
+          self.assertEqual(actual.rewards["track_angular_velocity"].weight, angular_weight)
+          self.assertEqual(actual.rewards["joint_pos_limits"].weight, -3.0)
+          self.assertEqual(actual.rewards["stand_still"].weight, -0.8 if perceptive else -1.0)
+          landing_weight = -0.006 if "StepUp" in go2w_task else (-0.003 if "v1" in go2w_task else -0.001)
+          self.assertEqual(actual.rewards["soft_landing"].weight, landing_weight)
           self.assertNotIn("illegal_contact", actual.terminations)
-          omitted = {"pose_weight", "foot_clearance_weight", "foot_swing_height_weight"}
+          omitted = {"foot_clearance_weight", "foot_swing_height_weight"}
           self.assertEqual(set(actual.curriculum), set(expected.curriculum) - omitted)
           for curriculum in actual.curriculum:
             reference = asdict(expected.curriculum[curriculum])
             if curriculum == "command_vel" and "v2" in go2w_task and "StepUp" not in go2w_task:
-              reverse_ranges = ((-0.1, 0.45), (-0.3, 0.65), (-0.5, 0.90), (-0.5, 1.10))
-              for entry, velocity_range in zip(reference["params"]["velocity_stages"], reverse_ranges, strict=True):
-                entry["lin_vel_x"] = velocity_range
+              # V2 command ranges are user-tuned independently of G1.
+              actual_stages = actual.curriculum[curriculum].params["velocity_stages"]
+              for entry, configured in zip(reference["params"]["velocity_stages"], actual_stages, strict=True):
+                for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_z"):
+                  entry[axis] = configured[axis]
             self.assertEqual(asdict(actual.curriculum[curriculum]), reference)
-          self.assertNotIn("pose_weight", actual.curriculum)
+          self.assertEqual("pose_weight" in actual.curriculum, "v2" in go2w_task and not play)
           self.assertNotIn("foot_clearance_weight", actual.curriculum)
           self.assertNotIn("foot_swing_height_weight", actual.curriculum)
 
   def test_v2_curriculum_is_configured_without_applying_v1_schedule(self):
     with patch.object(go2w_env_cfgs, "_configure_perceptive_v1_curriculum", side_effect=AssertionError("V2 must not apply V1 curriculum")):
       cfg = go2w_env_cfgs.unitree_go2w_perceptive_rough_v2_env_cfg()
-    self.assertEqual(set(cfg.curriculum), {"terrain_levels", "command_vel", "track_linear_velocity_weight"})
+    self.assertEqual(set(cfg.curriculum), {"terrain_levels", "command_vel", "track_linear_velocity_weight", "pose_weight"})
+
+  def test_v2_pose_weight_curriculum_uses_native_strict_thresholds(self):
+    for task in ("Unitree-Go2W-Perceptive-Rough-v2",
+                 "Unitree-Go2W-Perceptive-Rough-v2-StepUp-Finetune",
+                 "Unitree-Go2W-Perceptive-Rough-v2-Step14-Up"):
+      cfg = load_env_cfg(task)
+      env = SimpleNamespace(
+        common_step_counter=0,
+        reward_manager=SimpleNamespace(get_term_cfg=lambda name: cfg.rewards[name]),
+      )
+      term = cfg.curriculum["pose_weight"]
+      for step, weight in ((0, .75), (1, .75), (8000 * 24, .75),
+                           (8000 * 24 + 1, .6), (14000 * 24, .6), (14000 * 24 + 1, .5)):
+        env.common_step_counter = step
+        term.func(env, torch.tensor([0]), **term.params)
+        self.assertEqual(cfg.rewards["pose"].weight, weight, (task, step))
+      play = load_env_cfg(task, play=True)
+      self.assertNotIn("pose_weight", play.curriculum)
+      self.assertEqual(play.rewards["pose"].weight, .75)
 
   def test_v2_curriculum_keeps_user_reverse_ranges_and_g1_weight_timing(self):
     steps = (0, 1, 4000 * 24, 4000 * 24 + 1, 7000 * 24, 7000 * 24 + 1,
       9000 * 24, 9000 * 24 + 1, 14000 * 24, 14000 * 24 + 1,
       16000 * 24, 16000 * 24 + 1)
     traces = []
+    stages = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2").curriculum["command_vel"].params["velocity_stages"]
     for task in ("Unitree-Go2W-Perceptive-Rough-v2", "Unitree-G1-Perceptive-Rough-v2"):
       cfg = load_env_cfg(task)
       command = SimpleNamespace(cfg=cfg.commands["twist"])
@@ -598,20 +646,24 @@ class Go2WTests(unittest.TestCase):
       ranges, weight = traces[0][step]
       reference, reference_weight = traces[1][step]
       self.assertEqual(weight, reference_weight)
-      if step > 0:
-        self.assertEqual(ranges["lin_vel_y"], reference["lin_vel_y"])
-        self.assertEqual(ranges["ang_vel_z"], reference["ang_vel_z"])
+      active = stages[0]
+      for stage in stages:
+        if step > stage["step"]:
+          active = stage
+      for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_z"):
+        self.assertEqual(ranges[axis], active[axis])
+        self.assertLessEqual(active[axis][0], active[axis][1])
     # Seed stage zero in the config; later native thresholds still use strict >.
     self.assertEqual(traces[0][0][0]["lin_vel_x"], (-0.1, 0.45))
-    self.assertEqual(traces[0][0][0]["lin_vel_y"], (-0.05, 0.05))
-    self.assertEqual(traces[0][0][0]["ang_vel_z"], (-0.10, 0.10))
+    self.assertEqual(traces[0][0][0]["lin_vel_y"], stages[0]["lin_vel_y"])
+    self.assertEqual(traces[0][0][0]["ang_vel_z"], stages[0]["ang_vel_z"])
     self.assertEqual(traces[0][1][0]["lin_vel_x"], (-0.1, 0.45))
     self.assertEqual(traces[0][4000 * 24][0]["lin_vel_x"], (-0.1, 0.45))
     self.assertEqual(traces[0][4000 * 24 + 1][0]["lin_vel_x"], (-0.3, 0.65))
     self.assertEqual(traces[0][9000 * 24][0]["lin_vel_x"], (-0.3, 0.65))
     self.assertEqual(traces[0][9000 * 24 + 1][0]["lin_vel_x"], (-0.5, 0.90))
     self.assertEqual(traces[0][16000 * 24][0]["lin_vel_x"], (-0.5, 0.90))
-    self.assertEqual(traces[0][16000 * 24 + 1][0]["lin_vel_x"], (-0.5, 1.10))
+    self.assertEqual(traces[0][16000 * 24 + 1][0]["lin_vel_x"], stages[-1]["lin_vel_x"])
     self.assertEqual(traces[0][7000 * 24][1], 1.5)
     self.assertEqual(traces[0][7000 * 24 + 1][1], 1.35)
 

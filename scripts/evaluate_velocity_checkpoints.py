@@ -15,6 +15,8 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.utils.torch import configure_torch_backends
 
+from src.utils.rl_backend import rl_backend_info
+
 
 def evaluate_checkpoint(
   task_id: str,
@@ -27,6 +29,7 @@ def evaluate_checkpoint(
   device: str,
   seed: int,
 ) -> dict[str, float | str]:
+  rl_backend_info()
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_rl_cfg(task_id)
 

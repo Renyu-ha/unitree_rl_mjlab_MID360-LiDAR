@@ -23,6 +23,28 @@ def foot_height(
   return asset.data.site_pos_w[:, asset_cfg.site_ids, 2]  # (num_envs, num_sites)
 
 
+def foot_height_above_terrain(
+  env: ManagerBasedRlEnv,
+  sensor_names: tuple[str, ...],
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+  miss_value: float = 5.0,
+) -> torch.Tensor:
+  """Site height above its own terrain hit, in the selected site order.
+
+  Each sensor must cast one world-down ray at the corresponding site XY.
+  Wheel sites represent the axle, so no wheel radius is subtracted. Misses
+  use an explicit sentinel rather than the ray sensor's fallback hit position.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  site_z = asset.data.site_pos_w[:, asset_cfg.site_ids, 2]
+  scans = [env.scene[name].data for name in sensor_names]
+  ground_z = torch.cat([scan.hit_pos_w[..., 2] for scan in scans], dim=1)
+  valid = torch.cat([scan.distances >= 0 for scan in scans], dim=1)
+  if ground_z.shape != site_z.shape:
+    raise ValueError("Foot height requires one terrain ray per selected site")
+  return torch.where(valid, site_z - ground_z, torch.full_like(site_z, miss_value))
+
+
 def foot_air_time(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
   sensor: ContactSensor = env.scene[sensor_name]
   sensor_data = sensor.data

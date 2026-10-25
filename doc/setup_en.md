@@ -33,6 +33,12 @@ pip install -e .
 
 For an existing environment, update this branch and rerun `pip install -e .`. Remove collision-experiment `PYTHONPATH` prefixes and the former `--epa-horizon` / `--capture-epa` options. Train, play and recorded-input NaN replay verify the installed backend version and capacity. Training saves its source path and checksum in `params/collision.json`.
 
+RSL-RL must be exactly 5.5.1. Train/play/evaluate reject duplicate distributions or mixed import sources. Training records the interpreter, package path and seven core source hashes in `params/rl_backend.json`; new Go2W checkpoints also record them. Loading rejects a recorded version/source mismatch. Older checkpoints without this metadata produce a warning because their original runtime cannot be verified. Inspect the active environment with:
+
+```bash
+python -c "from src.utils.rl_backend import rl_backend_info; print(rl_backend_info())"
+```
+
 ## Fixed backend
 
 The fork starts at official MuJoCo-Warp v3.16.0, backports upstream [#1771](https://github.com/google-deepmind/mujoco_warp/pull/1771) (EPA contact extrapolation) and [#1796](https://github.com/google-deepmind/mujoco_warp/pull/1796) (degenerate closest faces), and fixes `MJ_MAX_EPAHORIZON=64`. Exact source commits and the original upstream regression tests are documented in [BACKPORTS.md](https://github.com/Renyu-ha/mujoco_warp/blob/6dea56edf221906310a90896e3ad913ad12459c3/BACKPORTS.md). Version `3.16.0.post1` satisfies mjlab's `~=3.16.0` requirement.
@@ -50,7 +56,7 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
   --env.observations.critic.nan-policy=error
 ```
 
-Default: GPU 0, local TensorBoard, logs under `logs/rsl_rl/go2w_perceptive/`. Use `--gpu-ids=None` for CPU checks. A new backend may compile Warp kernels on its first run; subsequent runs use the cache. Optional W&B: `--agent.logger=wandb --agent.wandb-project=go2w_mid360`. Optional live viewer: `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`.
+Default: GPU 0, W&B project `go2w_mid360`, local model files under `logs/rsl_rl/go2w_perceptive/`. Use `--agent.logger=tensorboard` for local-only logging and `--gpu-ids=None` for CPU checks. A new backend may compile Warp kernels on its first run; subsequent runs use the cache. Optional live viewer: `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`.
 
 The Viser display adapter converts MuJoCo's elevation sign convention while preserving native/video camera settings. Paused play publishes real initial transforms before the first frame, without requiring a Step action. Normal play and border inspection share the fix; the training viewer uses the same elevation conversion. Lighting and materials retain upstream defaults.
 

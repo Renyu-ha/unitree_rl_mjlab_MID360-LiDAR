@@ -23,6 +23,7 @@ from mjlab.utils.wrappers import VideoRecorder
 from src.utils.training_viewer import LiveTrainingViewer
 from src.utils.nan_capture import install_nan_capture
 from src.utils.physics_backend import physics_backend_info
+from src.utils.rl_backend import rl_backend_info
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,8 @@ class TrainConfig:
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
+  rl_settings = rl_backend_info()
+  print(f"[INFO] RSL-RL settings: {json.dumps(rl_settings)}", flush=True)
   collision_settings = physics_backend_info()
   print(f"[INFO] Collision settings: {json.dumps(collision_settings)}", flush=True)
   cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -143,6 +146,9 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
       # new run merely because a provenance file created its directory early.
       (log_dir / "params" / "collision.json").write_text(
         json.dumps(collision_settings, indent=2) + "\n", encoding="utf-8"
+      )
+      (log_dir / "params" / "rl_backend.json").write_text(
+        json.dumps(rl_settings, indent=2) + "\n", encoding="utf-8"
       )
 
     runner_cls = load_runner_cls(task_id)

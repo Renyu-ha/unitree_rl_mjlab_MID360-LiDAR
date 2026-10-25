@@ -202,6 +202,11 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
         compiled = env.sim.mj_model.sensor(slot.sensor_name)
         start, width = int(compiled.adr[0]), int(compiled.dim[0])
         env.sim.data.sensordata[:, start:start + width] = value
+      if frame == 0:
+        # Start with two already-airborne wheels so this short reflection check
+        # also exercises a nonzero timeout, including the zero-command frame.
+        air_time = torch.tensor([.8, .9, 0., 0.])
+        contact.data.current_air_time[:] = torch.stack((air_time, air_time[FOOT_PERM]))
       env.scene.update(env.step_dt)
       torch.testing.assert_close(contact.data.force, forces)
       torch.testing.assert_close(contact.data.found, found)

@@ -165,7 +165,7 @@ class Go2WSymmetryTests(unittest.TestCase):
       if not task.startswith("Unitree-Go2W-"):
         continue
       cfg = load_env_cfg(task)
-      for name, count, weight in (("leg_torques_l2", 12, -7.5e-6), ("wheel_torques_l2", 4, -5.e-6)):
+      for name, count, weight in (("leg_torques_l2", 12, -5.e-6), ("wheel_torques_l2", 4, -5.e-6)):
         term = cfg.rewards[name]
         selection = term.params["asset_cfg"]
         selection.resolve({"robot": asset})
