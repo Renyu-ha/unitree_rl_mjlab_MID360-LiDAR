@@ -98,3 +98,25 @@ def wheel_stand_still(
   stopped = command.norm(dim=-1) < command_threshold
   velocity = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
   return velocity.square().sum(dim=-1) * stopped
+
+
+def wheel_air_time_timeout(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  threshold: float = 0.5,
+  ramp_time: float = 0.25,
+) -> torch.Tensor:
+  """Continuously penalize each wheel that stays airborne beyond the grace time.
+
+  Use the contact sensor's current air time, which resets on contact and episode
+  reset. No landing event or movement command is required. Each wheel ramps from
+  zero to one over ``ramp_time`` seconds after ``threshold``; averaging keeps the
+  total cost in [0, 1]. Configure a negative reward weight.
+  """
+  if threshold < 0.0 or ramp_time <= 0.0:
+    raise ValueError("threshold must be non-negative and ramp_time must be positive")
+  air_time = env.scene[sensor_name].data.current_air_time
+  if air_time is None:
+    raise ValueError("Wheel air-time timeout requires track_air_time=True")
+  env.extras["log"]["Metrics/wheel_air_time_max_mean"] = air_time.max(dim=-1).values.mean()
+  return ((air_time - threshold) / ramp_time).clamp(0.0, 1.0).mean(dim=-1)
