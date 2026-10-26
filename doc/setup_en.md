@@ -33,10 +33,10 @@ pip install -e .
 
 For an existing environment, update this branch and rerun `pip install -e .`. Remove collision-experiment `PYTHONPATH` prefixes and the former `--epa-horizon` / `--capture-epa` options. Train, play and recorded-input NaN replay verify the installed backend version and capacity. Training saves its source path and checksum in `params/collision.json`.
 
-RSL-RL must be exactly 5.5.1. Train/play/evaluate reject duplicate distributions or mixed import sources. Training records the interpreter, package path and seven core source hashes in `params/rl_backend.json`; new Go2W checkpoints also record them. Loading rejects a recorded version/source mismatch. Older checkpoints without this metadata produce a warning because their original runtime cannot be verified. Inspect the active environment with:
+RSL-RL is pinned to 5.5.1 in `pyproject.toml` and resolved by `pip install -e .` during installation. Train, play, evaluation and checkpoint loading do not run extra RSL-RL version, source or hash checks or print this information. Check dependency consistency after installation with:
 
 ```bash
-python -c "from src.utils.rl_backend import rl_backend_info; print(rl_backend_info())"
+python -m pip check
 ```
 
 ## Fixed backend

@@ -239,7 +239,7 @@ action的 `build()` 创建本地子类；其 `_find_targets()` 先调用原生�
 
 算法边界必须明确：镜像样本没有重新仿真或重算GAE；固定版本RSL-RL直接复制原样本old log_prob，因此旧网络不严格对称时，镜像分支的初始PPO ratio不一定为1。测试中原始ratio偏离1最多约3.82e-6，镜像分支平均绝对log-ratio约0.59/0.48。这符合当前原生实现，不能解释为多采集了一批严格on-policy轨迹。Critic同时接收镜像观测并学习相同return目标，但普通MLP没有结构上强制 `V(s)=V(Ms)`；`std_type="scalar"` 表示16个动作维度各自学习直接参数化的std，不表示共用一个std。以上检查验证接线和数值流程，不证明增强必然改善长期步态。
 
-项目统一固定 `rsl-rl-lib==5.5.1`。`src/utils/rl_backend.py` 检查版本、重复安装、主包及已加载子模块的实际来源，并记录PPO、Symmetry、storage、runner、model、归一化和分布实现共7份源码的SHA256。train/play/evaluate启动检查，训练写入 `params/rl_backend.json`；Go2W runner直接构造时也检查。新checkpoint和ONNX保存版本、源码记录；checkpoint恢复时已记录的版本或源码不同会拒绝加载。旧checkpoint没有记录时会明确警告：只能核对当前运行环境，无法追溯原训练版本。
+项目在 `pyproject.toml` 中固定 `rsl-rl-lib==5.5.1`，由pip在安装时处理依赖约束。按2026-10-26的配置要求，移除train/play/evaluate及Go2W runner的运行时版本检查、源码哈希和重复打印，也不再写入 `params/rl_backend.json` 或新增checkpoint/ONNX版本记录。checkpoint使用mjlab原生加载流程，已有文件中的额外版本记录作为普通infos保留，不作为加载门槛。安装后可用 `python -m pip check` 检查依赖一致性。
 
 ### 2.8 用户配置同步与观测噪声清理（2026-10-25）
 

@@ -269,7 +269,15 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
       runner.save(str(path))
       restored = Go2WOnPolicyRunner(env, deepcopy(config), log_dir=None, device="cpu")
       infos = restored.load(str(path), map_location="cpu")
-      self.assertEqual(infos["rsl_rl_backend"]["version"], "5.5.1")
+      self.assertEqual(infos["env_state"]["common_step_counter"], env.unwrapped.common_step_counter)
+      # Older checkpoints may carry extra version records. Native loading should
+      # accept these as ordinary infos without checking the current installation.
+      checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+      checkpoint["infos"]["rsl_rl_backend"] = {"version": "5.0.1", "source_sha256": {}}
+      legacy_path = Path(directory) / "legacy_model.pt"
+      torch.save(checkpoint, legacy_path)
+      legacy_infos = restored.load(str(legacy_path), map_location="cpu")
+      self.assertEqual(legacy_infos["rsl_rl_backend"], checkpoint["infos"]["rsl_rl_backend"])
       torch.testing.assert_close(restored.alg.actor.state_dict(), runner.alg.actor.state_dict())
       torch.testing.assert_close(restored.alg.critic.state_dict(), runner.alg.critic.state_dict())
       torch.testing.assert_close(restored.alg.optimizer.state_dict(), runner.alg.optimizer.state_dict())
@@ -281,13 +289,9 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
         expected = restored.get_inference_policy()(sample).numpy()
       model = onnx.load(Path(directory) / "policy.onnx")
       onnx.checker.check_model(model)
-      metadata = {item.key: item.value for item in model.metadata_props}
-      self.assertEqual(metadata["rsl_rl_version"], "5.5.1")
-      self.assertEqual(json.loads(metadata["rsl_rl_source_sha256"]), infos["rsl_rl_backend"]["source_sha256"])
       actual = ReferenceEvaluator(model).run(None, {model.graph.input[0].name: sample["actor"].numpy()})[0]
       np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
       report["onnx_max_error"] = float(np.max(np.abs(actual - expected)))
-      report["rsl_rl_version"] = infos["rsl_rl_backend"]["version"]
 
 
 if __name__ == "__main__":

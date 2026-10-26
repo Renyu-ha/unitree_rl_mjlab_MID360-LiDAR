@@ -33,10 +33,10 @@ pip install -e .
 
 已有环境在更新当前分支后重新执行 `pip install -e .`，将替换原版后端。移除旧训练命令中的碰撞实验 `PYTHONPATH` 前缀和 `--epa-horizon`、`--capture-epa` 参数；这些临时接口已删除。训练、play 和 NaN 原始输入回放会检查实际后端版本和容量，并打印加载路径；训练同时写入 `params/collision.json`。
 
-RSL-RL只接受5.5.1。train/play/evaluate会校验实际版本和导入来源，拒绝重复安装或混用其他目录的RSL-RL子模块；训练将Python路径、包路径和关键源码SHA256写入 `params/rl_backend.json`，Go2W新checkpoint也保存这些记录。已记录的checkpoint版本或源码与当前环境不一致时拒绝加载；旧checkpoint缺少记录时会警告无法追溯原版本。可在当前激活环境中自行检查：
+RSL-RL通过 `pyproject.toml` 固定为5.5.1，由 `pip install -e .` 在安装时解析和安装。训练、播放、评估和checkpoint恢复不再额外检查或打印RSL-RL版本、导入来源与源码哈希。安装后可检查依赖是否一致：
 
 ```bash
-python -c "from src.utils.rl_backend import rl_backend_info; print(rl_backend_info())"
+python -m pip check
 ```
 
 ## 固定后端的内容
