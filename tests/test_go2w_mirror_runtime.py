@@ -185,7 +185,8 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
       env.sim.sense()
       # Inject distinct per-wheel values at actual compiled sensor addresses. This
       # tests extraction/ordering even when there are no physical contacts in air.
-      force = torch.tensor([[.3, .6, 3.], [0., 0., 0.], [-.2, .8, 5.], [1., -.4, 8.]])
+      # Native contact sensors report the wheel-on-terrain force (negative Z).
+      force = torch.tensor([[.3, .6, -3.], [0., 0., 0.], [-.2, .8, -5.], [1., -.4, -8.]])
       found = torch.tensor(([0., 0., 1., 1.], [1., 0., 1., 1.], [1., 0., 0., 1.])[frame])
       force = force * found[:, None]
       forces = torch.stack((force, force[FOOT_PERM] * POLAR))

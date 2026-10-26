@@ -554,6 +554,10 @@ def _configure_rewards(
 
     # Ground contact, rolling consistency and collisions.
     # Per-wheel products must align body/joint values with the contact sensor columns.
+    "wheel_contact_bonus": RewardTermCfg(
+      func=mdp.wheel_contact_bonus, weight=1.0,
+      params={"sensor_name": "feet_ground_contact", "force_threshold": 5.0},
+    ),
     "wheel_air_time_timeout": RewardTermCfg(
       func=mdp.wheel_air_time_timeout, weight=-0.5,
       params={

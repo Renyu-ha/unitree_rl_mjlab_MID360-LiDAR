@@ -120,3 +120,31 @@ def wheel_air_time_timeout(
     raise ValueError("Wheel air-time timeout requires track_air_time=True")
   env.extras["log"]["Metrics/wheel_air_time_max_mean"] = air_time.max(dim=-1).values.mean()
   return ((air_time - threshold) / ramp_time).clamp(0.0, 1.0).mean(dim=-1)
+
+
+def wheel_contact_bonus(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  force_threshold: float = 5.0,
+) -> torch.Tensor:
+  """Reward the fraction of wheels providing upward support at every step.
+
+  Requires wheel primaries and terrain secondary, with one world-frame net
+  force and contact flag per wheel. MuJoCo reports wheel-on-terrain force;
+  its opposite is the reaction supporting the wheel. Horizontal contact,
+  downward reaction and light touches do not count as support. A brief
+  touchdown only earns reward while supporting the robot; it cannot erase the
+  reward lost during suspension. No command gate or landing event is used.
+  """
+  if force_threshold < 0.0:
+    raise ValueError("force_threshold must be non-negative")
+  data = env.scene[sensor_name].data
+  force, found = data.force, data.found
+  if force is None or found is None or force.shape != (*found.shape, 3):
+    raise ValueError("Wheel contact bonus requires one net force and contact flag per wheel")
+  support_force_z = -force[..., 2]
+  supported = (found > 0) & (support_force_z > force_threshold)
+  fraction = supported.float().mean(dim=-1)
+  env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
+  env.extras["log"]["Metrics/all_wheels_grounded_ratio"] = supported.all(dim=-1).float().mean()
+  return fraction
