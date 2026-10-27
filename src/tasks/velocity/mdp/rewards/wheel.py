@@ -128,22 +128,25 @@ def wheel_contact_bonus(
   force_threshold: float = 5.0,
   command_name: str = "twist",
   command_x_threshold: float = 0.1,
-  command_y_threshold: float = 0.08,
-  command_yaw_threshold: float = 0.04,
+  command_x_ramp: float = 0.1,
+  command_y_scale: float = 0.1,
+  command_yaw_scale: float = 0.2,
 ) -> torch.Tensor:
-  """Reward wheel support while commanded to move straight forward or backward.
+  """Reward wheel support with a continuous preference for straight commands.
 
   Requires wheel primaries and terrain secondary, with one world-frame net
   force and contact flag per wheel. MuJoCo reports wheel-on-terrain force;
   its opposite is the reaction supporting the wheel. Horizontal contact,
   downward reaction and light touches do not count as support. A brief
   touchdown only earns reward while supporting the robot; it cannot erase the
-  reward lost during suspension. Gate on the requested motion, so actual yaw
-  drift cannot switch the reward off. Standing, strafing and turning earn zero.
+  reward lost during suspension. Commanded longitudinal motion ramps the reward
+  on; a Gaussian score reduces it as lateral/yaw commands grow. Use commands
+  rather than actual motion, so yaw drift cannot switch the reward off.
   """
-  if (force_threshold < 0.0 or command_x_threshold < 0.0
-      or command_y_threshold < 0.0 or command_yaw_threshold < 0.0):
+  if force_threshold < 0.0 or command_x_threshold < 0.0:
     raise ValueError("Force and command thresholds must be non-negative")
+  if command_x_ramp <= 0.0 or command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
+    raise ValueError("Command ramp and direction scales must be positive")
   data = env.scene[sensor_name].data
   force, found = data.force, data.found
   if force is None or found is None or force.shape != (*found.shape, 3):
@@ -154,12 +157,14 @@ def wheel_contact_bonus(
   command = env.command_manager.get_command(command_name)
   if command is None:
     raise ValueError("Wheel contact bonus requires a velocity command")
-  straight = (
-    (command[:, 0].abs() > command_x_threshold)
-    & (command[:, 1].abs() < command_y_threshold)
-    & (command[:, 2].abs() < command_yaw_threshold)
+  motion_weight = ((command[:, 0].abs() - command_x_threshold) / command_x_ramp).clamp(0.0, 1.0)
+  direction_score = torch.exp(
+    -(command[:, 1] / command_y_scale).square()
+    -(command[:, 2] / command_yaw_scale).square()
   )
+  gate = motion_weight * direction_score
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
   env.extras["log"]["Metrics/all_wheels_grounded_ratio"] = supported.all(dim=-1).float().mean()
-  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = straight.float().mean()
-  return fraction * straight.float()
+  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = (motion_weight > 0).float().mean()
+  env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"] = gate.mean()
+  return fraction * gate
