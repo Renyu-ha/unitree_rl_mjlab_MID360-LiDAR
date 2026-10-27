@@ -570,6 +570,16 @@ def _configure_rewards(
         "threshold": 0.7 if stepup else 0.5, "ramp_time": 0.25,
       },
     ),
+    "wheel_air_time_imbalance": RewardTermCfg(
+      func=mdp.wheel_air_time_imbalance, weight=-0.5,
+      params={
+        "sensor_name": "feet_ground_contact", "time_constant": 0.5,
+        "force_threshold": 5.0, "command_name": "twist",
+        "command_x_threshold": 0.1,
+        "command_y_scale": 0.1, "command_yaw_scale": 0.2,
+        "direction_score_type": "rational",
+      },
+    ),
     "wheel_lateral_slide": RewardTermCfg(
       func=mdp.wheel_lateral_slide, weight=-0.5,
       params={
