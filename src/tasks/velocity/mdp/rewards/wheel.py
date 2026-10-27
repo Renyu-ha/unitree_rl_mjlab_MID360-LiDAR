@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -131,6 +131,7 @@ def wheel_contact_bonus(
   command_x_ramp: float = 0.1,
   command_y_scale: float = 0.1,
   command_yaw_scale: float = 0.2,
+  direction_score_type: Literal["rational", "exponential"] = "rational",
 ) -> torch.Tensor:
   """Reward wheel support with a continuous preference for straight commands.
 
@@ -140,13 +141,16 @@ def wheel_contact_bonus(
   downward reaction and light touches do not count as support. A brief
   touchdown only earns reward while supporting the robot; it cannot erase the
   reward lost during suspension. Commanded longitudinal motion ramps the reward
-  on; a Gaussian score reduces it as lateral/yaw commands grow. Use commands
-  rather than actual motion, so yaw drift cannot switch the reward off.
+  on; a rational or exponential score reduces it as lateral/yaw commands grow.
+  Rational decay retains more support incentive during turns at the same scales.
+  Use commands rather than actual motion, so yaw drift cannot switch it off.
   """
   if force_threshold < 0.0 or command_x_threshold < 0.0:
     raise ValueError("Force and command thresholds must be non-negative")
   if command_x_ramp <= 0.0 or command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
     raise ValueError("Command ramp and direction scales must be positive")
+  if direction_score_type not in ("rational", "exponential"):
+    raise ValueError("direction_score_type must be 'rational' or 'exponential'")
   data = env.scene[sensor_name].data
   force, found = data.force, data.found
   if force is None or found is None or force.shape != (*found.shape, 3):
@@ -158,9 +162,13 @@ def wheel_contact_bonus(
   if command is None:
     raise ValueError("Wheel contact bonus requires a velocity command")
   motion_weight = ((command[:, 0].abs() - command_x_threshold) / command_x_ramp).clamp(0.0, 1.0)
-  direction_score = torch.exp(
-    -(command[:, 1] / command_y_scale).square()
-    -(command[:, 2] / command_yaw_scale).square()
+  direction_error = (
+    (command[:, 1] / command_y_scale).square()
+    + (command[:, 2] / command_yaw_scale).square()
+  )
+  direction_score = (
+    (1.0 + direction_error).reciprocal()
+    if direction_score_type == "rational" else torch.exp(-direction_error)
   )
   gate = motion_weight * direction_score
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
