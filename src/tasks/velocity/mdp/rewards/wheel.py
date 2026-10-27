@@ -126,18 +126,24 @@ def wheel_contact_bonus(
   env: ManagerBasedRlEnv,
   sensor_name: str,
   force_threshold: float = 5.0,
+  command_name: str = "twist",
+  command_x_threshold: float = 0.1,
+  command_y_threshold: float = 0.08,
+  command_yaw_threshold: float = 0.04,
 ) -> torch.Tensor:
-  """Reward the fraction of wheels providing upward support at every step.
+  """Reward wheel support while commanded to move straight forward or backward.
 
   Requires wheel primaries and terrain secondary, with one world-frame net
   force and contact flag per wheel. MuJoCo reports wheel-on-terrain force;
   its opposite is the reaction supporting the wheel. Horizontal contact,
   downward reaction and light touches do not count as support. A brief
   touchdown only earns reward while supporting the robot; it cannot erase the
-  reward lost during suspension. No command gate or landing event is used.
+  reward lost during suspension. Gate on the requested motion, so actual yaw
+  drift cannot switch the reward off. Standing, strafing and turning earn zero.
   """
-  if force_threshold < 0.0:
-    raise ValueError("force_threshold must be non-negative")
+  if (force_threshold < 0.0 or command_x_threshold < 0.0
+      or command_y_threshold < 0.0 or command_yaw_threshold < 0.0):
+    raise ValueError("Force and command thresholds must be non-negative")
   data = env.scene[sensor_name].data
   force, found = data.force, data.found
   if force is None or found is None or force.shape != (*found.shape, 3):
@@ -145,6 +151,15 @@ def wheel_contact_bonus(
   support_force_z = -force[..., 2]
   supported = (found > 0) & (support_force_z > force_threshold)
   fraction = supported.float().mean(dim=-1)
+  command = env.command_manager.get_command(command_name)
+  if command is None:
+    raise ValueError("Wheel contact bonus requires a velocity command")
+  straight = (
+    (command[:, 0].abs() > command_x_threshold)
+    & (command[:, 1].abs() < command_y_threshold)
+    & (command[:, 2].abs() < command_yaw_threshold)
+  )
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
   env.extras["log"]["Metrics/all_wheels_grounded_ratio"] = supported.all(dim=-1).float().mean()
-  return fraction
+  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = straight.float().mean()
+  return fraction * straight.float()

@@ -11,27 +11,53 @@ from src.tasks.velocity.mdp.rewards.wheel import wheel_contact_bonus
 
 
 class WheelContactBonusTests(unittest.TestCase):
-  def make_env(self, vertical_force):
+  def make_env(self, vertical_force, commands=None):
     vertical_force = torch.tensor(vertical_force, dtype=torch.float32)
     force = torch.zeros((*vertical_force.shape, 3))
     # Native MuJoCo contact force is wheel-on-terrain, opposite the support.
     force[..., 2] = -vertical_force
+    if commands is None:
+      commands = torch.zeros(vertical_force.shape[0], 3)
+      commands[:, 0] = .4
+    manager = SimpleNamespace(command=torch.as_tensor(commands, dtype=torch.float32))
+    manager.get_command = lambda name: manager.command
     return SimpleNamespace(
       scene={"contact": SimpleNamespace(data=SimpleNamespace(
         force=force, found=torch.ones_like(vertical_force),
       ))},
+      command_manager=manager,
       extras={"log": {}},
     )
 
   def reward(self, env, **params):
     return wheel_contact_bonus(env, "contact", **params)
 
-  def test_more_supporting_wheels_earn_more_reward_even_without_a_command(self):
+  def test_more_supporting_wheels_earn_more_reward_during_straight_motion(self):
     env = self.make_env([[0., 0., 0., 0.], [30., 30., 0., 0.],
                          [30., 30., 30., 0.], [30., 30., 30., 30.]])
     torch.testing.assert_close(self.reward(env), torch.tensor([0., .5, .75, 1.]))
     torch.testing.assert_close(env.extras["log"]["Metrics/all_wheels_grounded_ratio"],
                                torch.tensor(.25))
+
+  def test_forward_and_reverse_are_rewarded_but_standing_strafing_and_turning_are_not(self):
+    env = self.make_env([[30.] * 4] * 9, commands=[
+      [.4, 0., 0.], [-.4, 0., 0.], [0., 0., 0.], [0., .3, 0.],
+      [0., 0., .3], [.4, .2, 0.], [.4, 0., .2], [.4, .01, .01], [-.4, -.01, -.01],
+    ])
+    torch.testing.assert_close(self.reward(env), torch.tensor([1., 1., 0., 0., 0., 0., 0., 1., 1.]))
+    torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"],
+                               torch.tensor(4 / 9))
+
+  def test_command_boundaries_and_configurable_straight_tolerance(self):
+    env = self.make_env([[30.] * 4] * 6, commands=[
+      [.1, 0., 0.], [-.1, 0., 0.], [.4, .08, 0.], [.4, 0., -.04],
+      [.4, .079, .039], [-.4, -.079, -.039],
+    ])
+    torch.testing.assert_close(self.reward(env), torch.tensor([0., 0., 0., 0., 1., 1.]))
+    env = self.make_env([[30.] * 4], commands=[[.2, .1, .07]])
+    torch.testing.assert_close(self.reward(env), torch.zeros(1))
+    torch.testing.assert_close(self.reward(env, command_y_threshold=.2,
+                                          command_yaw_threshold=.1), torch.ones(1))
 
   def test_force_threshold_and_current_contact_filter_light_or_stale_contacts(self):
     env = self.make_env([[4.9, 5., 5.1, 40.]])
@@ -57,8 +83,9 @@ class WheelContactBonusTests(unittest.TestCase):
 
   def test_rejects_invalid_force_or_contact_data(self):
     env = self.make_env([[30., 30., 30., 30.]])
-    with self.assertRaises(ValueError):
-      self.reward(env, force_threshold=-1.)
+    for name in ("force_threshold", "command_x_threshold", "command_y_threshold", "command_yaw_threshold"):
+      with self.subTest(parameter=name), self.assertRaises(ValueError):
+        self.reward(env, **{name: -1.})
     data = env.scene["contact"].data
     for field in ("force", "found"):
       original = getattr(data, field)
@@ -68,6 +95,12 @@ class WheelContactBonusTests(unittest.TestCase):
       setattr(data, field, original)
     data.force = torch.zeros(1, 3, 3)
     with self.assertRaises(ValueError):
+      self.reward(env)
+
+  def test_missing_velocity_command_is_rejected(self):
+    env = self.make_env([[30.] * 4])
+    env.command_manager.command = None
+    with self.assertRaisesRegex(ValueError, "velocity command"):
       self.reward(env)
 
   def test_all_go2w_variants_reward_support_using_world_net_force(self):
@@ -80,7 +113,11 @@ class WheelContactBonusTests(unittest.TestCase):
           term = cfg.rewards["wheel_contact_bonus"]
           self.assertIs(term.func, wheel_contact_bonus)
           self.assertEqual(term.weight, 1.)
-          self.assertEqual(term.params, {"sensor_name": "feet_ground_contact", "force_threshold": 5.})
+          self.assertEqual(term.params, {
+            "sensor_name": "feet_ground_contact", "force_threshold": 5.,
+            "command_name": "twist", "command_x_threshold": .1,
+            "command_y_threshold": .08, "command_yaw_threshold": .04,
+          })
           sensor = next(sensor for sensor in cfg.scene.sensors
                         if sensor.name == term.params["sensor_name"])
           self.assertEqual(sensor.reduce, "netforce")
