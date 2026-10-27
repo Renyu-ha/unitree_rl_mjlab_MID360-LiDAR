@@ -9,7 +9,6 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg
 import src.tasks  # noqa: F401 -- register task variants
 from src.tasks.velocity.mdp.rewards.wheel import wheel_contact_bonus
 
-
 class WheelContactBonusTests(unittest.TestCase):
   def make_env(self, vertical_force, commands=None):
     vertical_force = torch.tensor(vertical_force, dtype=torch.float32)
@@ -39,16 +38,16 @@ class WheelContactBonusTests(unittest.TestCase):
     torch.testing.assert_close(env.extras["log"]["Metrics/all_wheels_grounded_ratio"],
                                torch.tensor(.25))
 
-  def test_forward_reverse_and_continuous_direction_scores_without_rewarding_in_place_motion(self):
+  def test_binary_straight_gate_without_rewarding_in_place_motion(self):
     env = self.make_env([[30.] * 4] * 9, commands=[
       [.4, 0., 0.], [-.4, 0., 0.], [0., 0., 0.], [0., .3, 0.],
       [0., 0., .3], [.4, .2, 0.], [.4, 0., .2], [.4, .01, .01], [-.4, -.01, -.01],
     ])
     torch.testing.assert_close(self.reward(env), torch.tensor([
-      1., 1., 0., 0., 0., 1 / 3, .5, 1 / 1.15, 1 / 1.15,
+      1., 1., 0., 0., 0., 0., 0., 1., 1.,
     ]))
     torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"],
-                               torch.tensor(6 / 9))
+                               torch.tensor(4 / 9))
     torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"],
                                self.reward(env).mean())
 
@@ -65,43 +64,6 @@ class WheelContactBonusTests(unittest.TestCase):
       0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1.,
     ]))
 
-  def test_lateral_and_yaw_scores_decay_continuously_and_symmetrically(self):
-    expected = torch.tensor([1., .8, 2 / 3, .5, 1 / 3])
-    for column, commands in (
-      (1, [0., .025, .05, .1, .2]), (2, [0., .05, .1, .2, .4]),
-    ):
-      env = self.make_env([[30.] * 4] * 5)
-      env.command_manager.command[:, column] = torch.tensor(commands)
-      with self.subTest(column=column):
-        torch.testing.assert_close(self.reward(env), expected)
-        env.command_manager.command[:, column].neg_()
-        torch.testing.assert_close(self.reward(env), expected)
-
-  def test_old_yaw_cutoff_no_longer_causes_a_reward_jump(self):
-    env = self.make_env([[30.] * 4] * 3, commands=[
-      [.4, 0., .03999], [.4, 0., .04], [.4, 0., .04001],
-    ])
-    values = self.reward(env)
-    self.assertTrue((values > .83).all())
-    self.assertLess(float((values[1:] - values[:-1]).abs().max()), .0001)
-
-  def test_direction_scales_can_relax_the_same_command(self):
-    env = self.make_env([[30.] * 4], commands=[[.2, .1, .07]])
-    ordinary = self.reward(env)
-    relaxed = self.reward(env, command_y_scale=.2, command_yaw_scale=.4)
-    self.assertTrue((relaxed > ordinary).all())
-    self.assertTrue((relaxed <= 1.).all())
-
-  def test_rational_decay_retains_more_turning_support_than_exponential(self):
-    env = self.make_env([[30.] * 4] * 3, commands=[
-      [.4, 0., 0.], [.4, .05, .1], [.4, .1, .2],
-    ])
-    rational = self.reward(env)
-    exponential = self.reward(env, direction_score_type="exponential")
-    torch.testing.assert_close(rational, torch.tensor([1., .5, 1 / 3]))
-    torch.testing.assert_close(exponential, torch.tensor([1., .36787944, .13533528]))
-    self.assertTrue((rational[1:] > exponential[1:]).all())
-
   def test_configured_bonus_has_symmetric_straight_command_cutoffs(self):
     term = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2").rewards["wheel_contact_bonus"]
     params = dict(term.params, sensor_name="contact")
@@ -112,7 +74,7 @@ class WheelContactBonusTests(unittest.TestCase):
     ])
     values = term.func(env, **params) * term.weight
     torch.testing.assert_close(values, torch.tensor([
-      .25, .25 / 1.19, 0., 0., .25 / 1.195, 0., 0., 0., .25 / 1.2, .25 / 1.385,
+      .25, .25, 0., 0., .25, 0., 0., 0., .25, .25,
     ]))
     torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"],
                                torch.tensor(.5))
@@ -150,13 +112,11 @@ class WheelContactBonusTests(unittest.TestCase):
 
   def test_rejects_invalid_force_or_contact_data(self):
     env = self.make_env([[30., 30., 30., 30.]])
-    with self.assertRaisesRegex(ValueError, "direction_score_type"):
-      self.reward(env, direction_score_type="unknown")
     for name in ("force_threshold", "command_x_threshold",
-                 "command_y_scale", "command_yaw_scale", "command_y_cutoff", "command_yaw_cutoff"):
+                 "command_y_cutoff", "command_yaw_cutoff"):
       with self.subTest(parameter=name), self.assertRaises(ValueError):
         self.reward(env, **{name: -1.})
-    for name in ("command_y_scale", "command_yaw_scale", "command_y_cutoff", "command_yaw_cutoff"):
+    for name in ("command_y_cutoff", "command_yaw_cutoff"):
       with self.subTest(zero_parameter=name), self.assertRaises(ValueError):
         self.reward(env, **{name: 0.})
     data = env.scene["contact"].data
@@ -189,8 +149,6 @@ class WheelContactBonusTests(unittest.TestCase):
           self.assertEqual(term.params, {
             "sensor_name": "feet_ground_contact", "force_threshold": 5.,
             "command_name": "twist", "command_x_threshold": .1,
-            "command_y_scale": .1, "command_yaw_scale": .2,
-            "direction_score_type": "rational",
             "command_y_cutoff": .02, "command_yaw_cutoff": .04,
           })
           sensor = next(sensor for sensor in cfg.scene.sensors
@@ -199,7 +157,6 @@ class WheelContactBonusTests(unittest.TestCase):
           self.assertEqual(sensor.num_slots, 1)
           self.assertEqual(sensor.fields, ("found", "force"))
           self.assertEqual(len(sensor.primary.pattern), 4)
-
 
 if __name__ == "__main__":
   unittest.main()

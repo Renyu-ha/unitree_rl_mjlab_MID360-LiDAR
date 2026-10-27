@@ -5,8 +5,7 @@
 
 from __future__ import annotations
 
-import math
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import torch
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -124,80 +123,44 @@ def wheel_air_time_timeout(
   return ((air_time - threshold) / ramp_time).clamp(0.0, 1.0).mean(dim=-1)
 
 
-class wheel_air_time_imbalance:
-  """Penalize unequal recent unsupported-time ratios across the four wheels.
+class wheel_air_time_memory:
+  """Add a recoverable time record to the ordinary air-time timeout cost.
 
-  Adapt the support-phase-ratio standard deviation from Irie et al. (2025),
-  using force-qualified wheel support and a time constant in seconds. The EMA
-  of unsupported time is equivalent to one minus the EMA of support. A light
-  touch cannot clear this history. Update history even when the command gate
-  is off; apply the absolute-command direction decay to the cost independently
-  of the contact bonus's optional straight-only cutoffs.
-  Equal airborne ratios incur no imbalance cost, so retain the contact bonus
-  and the independent continuous-air-time timeout. Configure a negative weight.
+  Reuse current_air_time from the same sensor. Suspension adds elapsed control
+  time; contact repays the recorded time instead of clearing it. Bound the
+  record at threshold + ramp_time so a long suspension can recover promptly.
+  Keep the original timeout formula and configure a separate negative weight.
   """
 
   def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
-    data = env.scene[cfg.params["sensor_name"]].data
-    force, found = data.force, data.found
-    if (force is None or found is None or found.ndim != 2 or found.shape[1] != 4
-        or force.shape != (*found.shape, 3)):
-      raise ValueError("Wheel air-time imbalance requires four net forces and contact flags")
-    # Zero means no accumulated unsupported time yet, including after reset.
-    self.air_ratio = torch.zeros_like(found, dtype=torch.float32)
+    air_time = env.scene[cfg.params["sensor_name"]].data.current_air_time
+    if air_time is None or air_time.ndim != 2:
+      raise ValueError("Wheel air-time memory requires track_air_time=True")
+    self.air_time = torch.zeros_like(air_time)
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
-    self.air_ratio[slice(None) if env_ids is None else env_ids] = 0.0
+    self.air_time[slice(None) if env_ids is None else env_ids] = 0.0
 
   def __call__(
     self,
     env: ManagerBasedRlEnv,
     sensor_name: str,
-    time_constant: float = 0.5,
-    force_threshold: float = 5.0,
-    command_name: str = "twist",
-    command_x_threshold: float = 0.1,
-    command_y_scale: float = 0.1,
-    command_yaw_scale: float = 0.2,
-    direction_score_type: Literal["rational", "exponential"] = "rational",
+    threshold: float = 0.5,
+    ramp_time: float = 0.25,
+    recovery_rate: float = 2.0,
   ) -> torch.Tensor:
-    if time_constant <= 0.0 or env.step_dt <= 0.0:
-      raise ValueError("time_constant and control step duration must be positive")
-    if force_threshold < 0.0 or command_x_threshold < 0.0:
-      raise ValueError("Force and command thresholds must be non-negative")
-    if command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
-      raise ValueError("Direction scales must be positive")
-    if direction_score_type not in ("rational", "exponential"):
-      raise ValueError("direction_score_type must be 'rational' or 'exponential'")
-    data = env.scene[sensor_name].data
-    force, found = data.force, data.found
-    if (force is None or found is None or found.shape != self.air_ratio.shape
-        or force.shape != (*self.air_ratio.shape, 3)):
-      raise ValueError("Wheel contact shape changed since air-time imbalance initialization")
-    command = env.command_manager.get_command(command_name)
-    if command is None:
-      raise ValueError("Wheel air-time imbalance requires a velocity command")
-
-    # Wheel-on-terrain force has the opposite sign to the upward support reaction.
-    supported = (found > 0) & (-force[..., 2] > force_threshold)
-    decay = math.exp(-env.step_dt / time_constant)
-    self.air_ratio.mul_(decay).add_((~supported).float(), alpha=1.0 - decay)
-    imbalance = self.air_ratio.std(dim=-1, correction=0)
-    motion_weight = (command[:, 0].abs() > command_x_threshold).float()
-    direction_magnitude = (
-      (command[:, 1] / command_y_scale).abs()
-      + (command[:, 2] / command_yaw_scale).abs()
-    )
-    direction_score = (
-      (1.0 + direction_magnitude).reciprocal()
-      if direction_score_type == "rational" else torch.exp(-direction_magnitude)
-    )
-    gate = motion_weight * direction_score
-    env.extras["log"]["Metrics/wheel_air_ratio_mean"] = self.air_ratio.mean()
-    env.extras["log"]["Metrics/wheel_air_ratio_max_mean"] = self.air_ratio.max(dim=-1).values.mean()
-    env.extras["log"]["Metrics/wheel_air_ratio_std_mean"] = imbalance.mean()
-    env.extras["log"]["Metrics/wheel_air_time_imbalance_gate_mean"] = gate.mean()
-    return imbalance * gate
+    if threshold < 0.0 or ramp_time <= 0.0 or recovery_rate <= 0.0 or env.step_dt <= 0.0:
+      raise ValueError("threshold must be non-negative and timing/rate parameters positive")
+    current = env.scene[sensor_name].data.current_air_time
+    if current is None or current.shape != self.air_time.shape:
+      raise ValueError("Wheel air-time memory requires unchanged tracked air-time shape")
+    self.air_time.copy_(torch.where(
+      current > 0.0,
+      torch.maximum(self.air_time + env.step_dt, current),
+      self.air_time - recovery_rate * env.step_dt,
+    ).clamp(0.0, threshold + ramp_time))
+    env.extras["log"]["Metrics/wheel_air_time_memory_max_mean"] = self.air_time.max(dim=-1).values.mean()
+    return ((self.air_time - threshold) / ramp_time).clamp(0.0, 1.0).mean(dim=-1)
 
 
 def wheel_contact_bonus(
@@ -206,37 +169,22 @@ def wheel_contact_bonus(
   force_threshold: float = 5.0,
   command_name: str = "twist",
   command_x_threshold: float = 0.1,
-  command_y_scale: float = 0.1,
-  command_yaw_scale: float = 0.2,
-  direction_score_type: Literal["rational", "exponential"] = "rational",
-  command_y_cutoff: float | None = None,
-  command_yaw_cutoff: float | None = None,
+  command_y_cutoff: float = 0.02,
+  command_yaw_cutoff: float = 0.04,
 ) -> torch.Tensor:
-  """Reward wheel support with a continuous preference for straight commands.
+  """Reward the supported wheel fraction behind a binary straight-command gate.
 
   Requires wheel primaries and terrain secondary, with one world-frame net
-  force and contact flag per wheel. MuJoCo reports wheel-on-terrain force;
-  its opposite is the reaction supporting the wheel. Horizontal contact,
-  downward reaction and light touches do not count as support. A brief
-  touchdown only earns reward while supporting the robot; it cannot erase the
-  reward lost during suspension. The reward is enabled only when the absolute
-  longitudinal command exceeds its threshold; a rational or exponential score
-  reduces it as lateral/yaw commands grow.
-  Both scores use the sum of absolute normalized commands, not squared commands.
-  With rational decay, either direction scale alone gives a score of one half.
-  Optional lateral/yaw cutoffs disable this bonus during maneuvers, freeing the
-  policy to lift a wheel. Leaving both cutoffs unset preserves ungated decay.
-  Use commands rather than actual motion, so yaw drift cannot switch it off.
+  force and contact flag per wheel. The opposite of wheel-on-terrain force
+  is the reaction supporting the wheel. Horizontal contact, downward reaction
+  and light touches do not count. All commands inside the straight region use
+  the same weight, without a second direction score. Use commanded motion so
+  actual yaw drift cannot switch off the reward.
   """
   if force_threshold < 0.0 or command_x_threshold < 0.0:
     raise ValueError("Force and command thresholds must be non-negative")
-  if command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
-    raise ValueError("Direction scales must be positive")
-  if direction_score_type not in ("rational", "exponential"):
-    raise ValueError("direction_score_type must be 'rational' or 'exponential'")
-  if ((command_y_cutoff is not None and command_y_cutoff <= 0.0)
-      or (command_yaw_cutoff is not None and command_yaw_cutoff <= 0.0)):
-    raise ValueError("Optional direction cutoffs must be positive")
+  if command_y_cutoff <= 0.0 or command_yaw_cutoff <= 0.0:
+    raise ValueError("Direction cutoffs must be positive")
   data = env.scene[sensor_name].data
   force, found = data.force, data.found
   if force is None or found is None or force.shape != (*found.shape, 3):
@@ -247,23 +195,13 @@ def wheel_contact_bonus(
   command = env.command_manager.get_command(command_name)
   if command is None:
     raise ValueError("Wheel contact bonus requires a velocity command")
-  motion_weight = (command[:, 0].abs() > command_x_threshold).float()
-  direction_magnitude = (
-    (command[:, 1] / command_y_scale).abs()
-    + (command[:, 2] / command_yaw_scale).abs()
+  gate = (
+    (command[:, 0].abs() > command_x_threshold)
+    & (command[:, 1].abs() < command_y_cutoff)
+    & (command[:, 2].abs() < command_yaw_cutoff)
   )
-  direction_score = (
-    (1.0 + direction_magnitude).reciprocal()
-    if direction_score_type == "rational" else torch.exp(-direction_magnitude)
-  )
-  direction_allowed = torch.ones_like(motion_weight, dtype=torch.bool)
-  if command_y_cutoff is not None:
-    direction_allowed &= command[:, 1].abs() < command_y_cutoff
-  if command_yaw_cutoff is not None:
-    direction_allowed &= command[:, 2].abs() < command_yaw_cutoff
-  gate = motion_weight * direction_score * direction_allowed
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
   env.extras["log"]["Metrics/all_wheels_grounded_ratio"] = supported.all(dim=-1).float().mean()
-  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = (gate > 0).float().mean()
-  env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"] = gate.mean()
+  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = gate.float().mean()
+  env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"] = gate.float().mean()
   return fraction * gate
