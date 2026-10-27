@@ -559,7 +559,7 @@ def _configure_rewards(
       params={
         "sensor_name": "feet_ground_contact", "force_threshold": 5.0,
         "command_name": "twist", "command_x_threshold": 0.1,
-        "command_x_ramp": 0.1, "command_y_scale": 0.1, "command_yaw_scale": 0.2,
+        "command_y_scale": 0.1, "command_yaw_scale": 0.2,
         "direction_score_type": "rational",
       },
     ),

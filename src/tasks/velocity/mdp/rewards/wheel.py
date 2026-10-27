@@ -128,7 +128,6 @@ def wheel_contact_bonus(
   force_threshold: float = 5.0,
   command_name: str = "twist",
   command_x_threshold: float = 0.1,
-  command_x_ramp: float = 0.1,
   command_y_scale: float = 0.1,
   command_yaw_scale: float = 0.2,
   direction_score_type: Literal["rational", "exponential"] = "rational",
@@ -140,8 +139,9 @@ def wheel_contact_bonus(
   its opposite is the reaction supporting the wheel. Horizontal contact,
   downward reaction and light touches do not count as support. A brief
   touchdown only earns reward while supporting the robot; it cannot erase the
-  reward lost during suspension. Commanded longitudinal motion ramps the reward
-  on; a rational or exponential score reduces it as lateral/yaw commands grow.
+  reward lost during suspension. The reward is enabled only when the absolute
+  longitudinal command exceeds its threshold; a rational or exponential score
+  reduces it as lateral/yaw commands grow.
   Both scores use the sum of absolute normalized commands, not squared commands.
   With rational decay, either direction scale alone gives a score of one half.
   Rational decay retains more support incentive during turns at the same scales.
@@ -149,8 +149,8 @@ def wheel_contact_bonus(
   """
   if force_threshold < 0.0 or command_x_threshold < 0.0:
     raise ValueError("Force and command thresholds must be non-negative")
-  if command_x_ramp <= 0.0 or command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
-    raise ValueError("Command ramp and direction scales must be positive")
+  if command_y_scale <= 0.0 or command_yaw_scale <= 0.0:
+    raise ValueError("Direction scales must be positive")
   if direction_score_type not in ("rational", "exponential"):
     raise ValueError("direction_score_type must be 'rational' or 'exponential'")
   data = env.scene[sensor_name].data
@@ -163,7 +163,7 @@ def wheel_contact_bonus(
   command = env.command_manager.get_command(command_name)
   if command is None:
     raise ValueError("Wheel contact bonus requires a velocity command")
-  motion_weight = ((command[:, 0].abs() - command_x_threshold) / command_x_ramp).clamp(0.0, 1.0)
+  motion_weight = (command[:, 0].abs() > command_x_threshold).float()
   direction_magnitude = (
     (command[:, 1] / command_y_scale).abs()
     + (command[:, 2] / command_yaw_scale).abs()

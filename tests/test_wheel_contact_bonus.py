@@ -52,12 +52,18 @@ class WheelContactBonusTests(unittest.TestCase):
     torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"],
                                self.reward(env).mean())
 
-  def test_longitudinal_motion_ramps_on_in_both_directions(self):
-    env = self.make_env([[30.] * 4] * 7, commands=[
-      [.1, 0., 0.], [-.1, 0., 0.], [.125, 0., 0.], [-.15, 0., 0.],
-      [.2, 0., 0.], [-.4, 0., 0.], [.4, 0., 0.],
+  def test_longitudinal_motion_uses_a_binary_threshold_in_both_directions(self):
+    env = self.make_env([[30.] * 4] * 11, commands=[
+      [0., 0., 0.], [.09999, 0., 0.], [.1, 0., 0.], [.10001, 0., 0.],
+      [-.09999, 0., 0.], [-.1, 0., 0.], [-.10001, 0., 0.],
+      [.125, 0., 0.], [-.15, 0., 0.], [.2, 0., 0.], [-.4, 0., 0.],
     ])
-    torch.testing.assert_close(self.reward(env), torch.tensor([0., 0., .25, .5, 1., 1., 1.]))
+    torch.testing.assert_close(self.reward(env), torch.tensor([
+      0., 0., 0., 1., 0., 0., 1., 1., 1., 1., 1.,
+    ]))
+    torch.testing.assert_close(self.reward(env, command_x_threshold=.15), torch.tensor([
+      0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1.,
+    ]))
 
   def test_lateral_and_yaw_scores_decay_continuously_and_symmetrically(self):
     expected = torch.tensor([1., .8, 2 / 3, .5, 1 / 3])
@@ -122,11 +128,11 @@ class WheelContactBonusTests(unittest.TestCase):
     env = self.make_env([[30., 30., 30., 30.]])
     with self.assertRaisesRegex(ValueError, "direction_score_type"):
       self.reward(env, direction_score_type="unknown")
-    for name in ("force_threshold", "command_x_threshold", "command_x_ramp",
+    for name in ("force_threshold", "command_x_threshold",
                  "command_y_scale", "command_yaw_scale"):
       with self.subTest(parameter=name), self.assertRaises(ValueError):
         self.reward(env, **{name: -1.})
-    for name in ("command_x_ramp", "command_y_scale", "command_yaw_scale"):
+    for name in ("command_y_scale", "command_yaw_scale"):
       with self.subTest(zero_parameter=name), self.assertRaises(ValueError):
         self.reward(env, **{name: 0.})
     data = env.scene["contact"].data
@@ -159,7 +165,7 @@ class WheelContactBonusTests(unittest.TestCase):
           self.assertEqual(term.params, {
             "sensor_name": "feet_ground_contact", "force_threshold": 5.,
             "command_name": "twist", "command_x_threshold": .1,
-            "command_x_ramp": .1, "command_y_scale": .1, "command_yaw_scale": .2,
+            "command_y_scale": .1, "command_yaw_scale": .2,
             "direction_score_type": "rational",
           })
           sensor = next(sensor for sensor in cfg.scene.sensors
