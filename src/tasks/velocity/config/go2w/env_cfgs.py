@@ -555,12 +555,13 @@ def _configure_rewards(
     # Ground contact, rolling consistency and collisions.
     # Per-wheel products must align body/joint values with the contact sensor columns.
     "wheel_contact_bonus": RewardTermCfg(
-      func=mdp.wheel_contact_bonus, weight=1.0,
+      func=mdp.wheel_contact_bonus, weight=0.25,
       params={
         "sensor_name": "feet_ground_contact", "force_threshold": 5.0,
         "command_name": "twist", "command_x_threshold": 0.1,
         "command_y_scale": 0.1, "command_yaw_scale": 0.2,
         "direction_score_type": "rational",
+        "command_y_cutoff": 0.02, "command_yaw_cutoff": 0.04,
       },
     ),
     "wheel_air_time_timeout": RewardTermCfg(
@@ -571,9 +572,9 @@ def _configure_rewards(
       },
     ),
     "wheel_air_time_imbalance": RewardTermCfg(
-      func=mdp.wheel_air_time_imbalance, weight=-0.5,
+      func=mdp.wheel_air_time_imbalance, weight=-0.25,
       params={
-        "sensor_name": "feet_ground_contact", "time_constant": 0.5,
+        "sensor_name": "feet_ground_contact", "time_constant": 1.0,
         "force_threshold": 5.0, "command_name": "twist",
         "command_x_threshold": 0.1,
         "command_y_scale": 0.1, "command_yaw_scale": 0.2,

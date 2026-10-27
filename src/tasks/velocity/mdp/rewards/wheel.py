@@ -131,7 +131,8 @@ class wheel_air_time_imbalance:
   using force-qualified wheel support and a time constant in seconds. The EMA
   of unsupported time is equivalent to one minus the EMA of support. A light
   touch cannot clear this history. Update history even when the command gate
-  is off; apply the same direction weighting as wheel_contact_bonus to the cost.
+  is off; apply the absolute-command direction decay to the cost independently
+  of the contact bonus's optional straight-only cutoffs.
   Equal airborne ratios incur no imbalance cost, so retain the contact bonus
   and the independent continuous-air-time timeout. Configure a negative weight.
   """
@@ -208,6 +209,8 @@ def wheel_contact_bonus(
   command_y_scale: float = 0.1,
   command_yaw_scale: float = 0.2,
   direction_score_type: Literal["rational", "exponential"] = "rational",
+  command_y_cutoff: float | None = None,
+  command_yaw_cutoff: float | None = None,
 ) -> torch.Tensor:
   """Reward wheel support with a continuous preference for straight commands.
 
@@ -221,7 +224,8 @@ def wheel_contact_bonus(
   reduces it as lateral/yaw commands grow.
   Both scores use the sum of absolute normalized commands, not squared commands.
   With rational decay, either direction scale alone gives a score of one half.
-  Rational decay retains more support incentive during turns at the same scales.
+  Optional lateral/yaw cutoffs disable this bonus during maneuvers, freeing the
+  policy to lift a wheel. Leaving both cutoffs unset preserves ungated decay.
   Use commands rather than actual motion, so yaw drift cannot switch it off.
   """
   if force_threshold < 0.0 or command_x_threshold < 0.0:
@@ -230,6 +234,9 @@ def wheel_contact_bonus(
     raise ValueError("Direction scales must be positive")
   if direction_score_type not in ("rational", "exponential"):
     raise ValueError("direction_score_type must be 'rational' or 'exponential'")
+  if ((command_y_cutoff is not None and command_y_cutoff <= 0.0)
+      or (command_yaw_cutoff is not None and command_yaw_cutoff <= 0.0)):
+    raise ValueError("Optional direction cutoffs must be positive")
   data = env.scene[sensor_name].data
   force, found = data.force, data.found
   if force is None or found is None or force.shape != (*found.shape, 3):
@@ -249,9 +256,14 @@ def wheel_contact_bonus(
     (1.0 + direction_magnitude).reciprocal()
     if direction_score_type == "rational" else torch.exp(-direction_magnitude)
   )
-  gate = motion_weight * direction_score
+  direction_allowed = torch.ones_like(motion_weight, dtype=torch.bool)
+  if command_y_cutoff is not None:
+    direction_allowed &= command[:, 1].abs() < command_y_cutoff
+  if command_yaw_cutoff is not None:
+    direction_allowed &= command[:, 2].abs() < command_yaw_cutoff
+  gate = motion_weight * direction_score * direction_allowed
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
   env.extras["log"]["Metrics/all_wheels_grounded_ratio"] = supported.all(dim=-1).float().mean()
-  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = (motion_weight > 0).float().mean()
+  env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"] = (gate > 0).float().mean()
   env.extras["log"]["Metrics/wheel_contact_bonus_gate_mean"] = gate.mean()
   return fraction * gate

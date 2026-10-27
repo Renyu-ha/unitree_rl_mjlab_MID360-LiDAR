@@ -127,21 +127,31 @@ reward_term = -0.5 * sum_i(contact_i * slide_i)
 
 2026-10-25 新增 `wheel_air_time_timeout`，全部Go2W任务启用，权重 `-0.5`。逐轮使用共享接触传感器的 `current_air_time`，普通任务允许连续悬空0.5 s，StepUp允许0.7 s；超过阈值后在0.25 s内线性增加到每轮1，再对四轮取平均。即 `cost = mean(clamp((current_air_time - threshold) / 0.25, 0, 1))`，单腿封顶的奖励率为−0.125，四腿均封顶为−0.5；实际每步奖励仍由mjlab乘控制步长。站立和运动时均逐步计罚，不依赖首次落地事件。原生计时按 `found` 判断接触，发生接触或重置对应环境后清零；它不使用空转项的1 N力阈值。`Metrics/wheel_air_time_max_mean`记录各环境当前最长单腿悬空时间的均值。这些初始参数通过数值与接入验证，训练效果仍需对照。
 
-2026-10-26 新增 `wheel_contact_bonus`，全部Go2W任务启用，权重 `+1.0`；2026-10-27按用户要求改为连续方向评分，默认使用分式。原生传感器在轮子为primary、地形为secondary时记录轮子对地形的力，因此向上支撑反力为 `-force_z`，逐轮有效接地条件为 `found > 0` 且 `-force_z > 5 N`。接地比例为有效接地轮数除以4：四轮1、三轮0.75、两轮0.5。原始奖励为 `contact_fraction * motion_weight * direction_score`：前后移动系数按二元判断 `motion_weight = float(abs(cmd_vx) > 0.1)`，前后速度指令绝对值大于0.1 m/s时为1，否则为0，不再渐变或裁剪，移除 `command_x_ramp` 参数；2026-10-27进一步按用户要求将方向幅值由平方改为绝对值：令 `q = abs(cmd_vy / 0.1) + abs(cmd_wz / 0.2)`，默认 `direction_score = 1 / (1 + q)`，侧向速度尺度为0.1 m/s，偏航角速度尺度为0.2 rad/s。配置 `direction_score_type="exponential"` 可切回 `exp(-q)` 做对照；默认值为 `"rational"`。同尺度下分式衰减更慢，转向时保留更多接地激励，也更强地鼓励转向时保持接地，不能据此保证更容易转向。前进和后退对称，侧移和转向指令越大系数越小，不再在旧阈值处硬切换；站立、纯侧移和原地转向因无前后移动仍为0。以上均使用指令，避免实际偏航让策略关闭奖励。短暂点地只能获得接地期间的奖励，不会补回此前悬空损失的收益；纯水平顶住台阶或不足5 N的轻触不计入支撑。保留 `wheel_air_time_timeout`，其计罚不加方向权重。奖励由mjlab统一乘控制步长。`Metrics/wheel_support_fraction`和`Metrics/all_wheels_grounded_ratio`记录全部环境的当前物理支撑状态；`Metrics/wheel_contact_bonus_active_ratio`记录前后移动门槛开启比例，`Metrics/wheel_contact_bonus_gate_mean`记录移动和方向系数乘积的均值。权重及各尺度均可在奖励配置中调整，长期效果需结合跟踪误差与分项回报对照。
+2026-10-26 新增 `wheel_contact_bonus`，全部Go2W任务显式启用。2026-10-27针对小转向/侧移时偏好持续贴地的问题，将当前权重降为 `+0.25`，并只在接近纯直行的指令区域开启：`abs(cmd_vx) > 0.1 m/s`、`abs(cmd_vy) < 0.02 m/s`、`abs(cmd_wz) < 0.04 rad/s` 必须同时满足。等于侧向或转向边界时关闭。开启区域内继续使用绝对值分式评分，不强制指定抬腿频率或高度：
 
-2026-10-27 新增独立惩罚 `wheel_air_time_imbalance`，全部Go2W训练/播放任务显式启用，初始权重 `-0.5`，不替换或修改 `wheel_air_time_timeout`。参考 [Irie等（2025）附录A的支撑时间比例标准差](https://www.furo.org/irie/papers/ar_qrc2024.pdf)，移植时使用与接地奖励相同的有效支撑条件：`c_i = (found_i > 0) and (-force_z_i > 5 N)`。新增项记录逐轮近期无有效支撑时间比例，而不是连续悬空计时器：
+```text
+straight = (abs(cmd_vx) > 0.1) and (abs(cmd_vy) < 0.02) and (abs(cmd_wz) < 0.04)
+q = abs(cmd_vy / 0.1) + abs(cmd_wz / 0.2)
+reward_rate = 0.25 * contact_fraction * float(straight) / (1 + q)
+```
+
+原生传感器在轮子为primary、地形为secondary时记录轮子对地形的力，因此向上支撑反力为 `-force_z`；有效接地条件为 `found > 0` 且 `-force_z > 5 N`。`contact_fraction`为有效接地轮数除以4。前后移动判断仍是二元条件，不作渐变或裁剪；侧向/转向关闭条件均使用指令，实际偏航不能关闭奖励。两项关闭阈值分别由 `command_y_cutoff`、`command_yaw_cutoff` 显式配置；函数接口默认均为None，可保留旧版无关闭阈值的分式/指数对照。`direction_score_type="exponential"` 使用 `exp(-q)`，默认仍为 `"rational"`。四轮接地且纯直行时奖励率0.25，抬一轮损失0.0625；转向指令0.05 rad/s或侧向指令0.02 m/s时，无论四轮还是三轮接地，本项均为0，正常换步不会损失本项奖励。站立、纯侧移和原地转向因前后门槛关闭，本项也为0。
+
+短暂点地只能获得有效支撑期间的收益，纯水平顶住台阶或不足5 N的轻触不计支撑。`Metrics/wheel_support_fraction`、`Metrics/all_wheels_grounded_ratio`记录全部环境的物理支撑状态；`Metrics/wheel_contact_bonus_active_ratio`记录前后门槛及侧向/转向阈值同时开启的比例，`Metrics/wheel_contact_bonus_gate_mean`记录门控和方向评分乘积的均值。原独立超时项保留，当前参数为权重-0.5、普通任务0.5 s/StepUp任务0.7 s宽限、0.25 s递增。奖励由mjlab统一乘控制步长。这组参数是待训练对照的候选，验证目标是跟踪、侧滑和长期悬空同时改善。
+
+2026-10-27 新增独立惩罚 `wheel_air_time_imbalance`，全部Go2W训练/播放任务显式启用，当前权重 `-0.25`，独立保留 `wheel_air_time_timeout` 的实现。参考 [Irie等（2025）附录A的支撑时间比例标准差](https://www.furo.org/irie/papers/ar_qrc2024.pdf)，移植时使用与接地奖励相同的有效支撑条件：`c_i = (found_i > 0) and (-force_z_i > 5 N)`。新增项记录逐轮近期无有效支撑时间比例，而不是连续悬空计时器：
 
 ```text
 alpha = exp(-step_dt / time_constant)
 air_ratio_i = alpha * air_ratio_i + (1 - alpha) * (1 - c_i)
 cost = std(air_ratio, correction=0)
 gate = float(abs(cmd_vx) > 0.1) / (1 + abs(cmd_vy / 0.1) + abs(cmd_wz / 0.2))
-reward = -0.5 * cost * gate * step_dt
+reward = -0.25 * cost * gate * step_dt
 ```
 
-`time_constant=0.5 s` 是本项目的初始取值，按控制周期换算EMA系数，不直接照搬论文每步0.9。50 Hz时 `alpha≈0.960789`；单步有效点地只把该轮历史比例乘以alpha，不会清零，轻触或纯水平接触不会降低历史比例。这里的EMA是指数加权比例，不是固定长度窗口。历史在方向门控关闭时仍更新；输出惩罚使用与 `wheel_contact_bonus` 相同的二元前后移动门槛和绝对值分式方向系数，也保留 `direction_score_type="exponential"` 对照。各环境独立存储四轮历史，episode重置通过奖励管理器只清零对应环境，重新逐步建立比例。
+当前任务配置使用 `time_constant=1.0 s`，延长记忆并降低权重，以减轻正常单腿先抬起或轮流换步的暂态代价；函数接口保留0.5 s默认值，显式任务配置优先。EMA按控制周期换算，不直接照搬论文每步0.9。50 Hz、1 s时间常数时 `alpha≈0.980199`；单步有效点地只把该轮历史比例乘以alpha，不会清零，轻触或纯水平接触不会降低历史比例。EMA是指数加权比例，不是固定长度窗口。历史在方向门控关闭时仍更新；输出继续使用二元前后移动门槛及绝对值分式方向衰减，但不套用接地奖励新增的侧向/转向关闭阈值，因此混合转弯指令下仍可弱惩罚某腿长期闲置。也保留 `direction_score_type="exponential"` 对照。各环境独立存储四轮历史，episode重置只清零对应环境。
 
-总体标准差范围为 `[0, 0.5]`；一轮始终悬空、另外三轮持续支撑时稳态约0.433，在方向系数为1时对应奖励率约 `-0.2165`；两轮持续悬空时上限为 `-0.25`。本项鼓励各腿均衡参与支撑，允许轮流抬腿；四轮的悬空比例都相等时惩罚为0，包括全部悬空，因此必须结合已有接地奖励和独立超时项使用。它不增加传感器或策略观测。`Metrics/wheel_air_ratio_mean`、`Metrics/wheel_air_ratio_max_mean`、`Metrics/wheel_air_ratio_std_mean`记录未乘方向系数的历史比例及不均衡程度，`Metrics/wheel_air_time_imbalance_gate_mean`记录门控均值。初始权重与时间常数尚需训练对照。
+总体标准差范围为 `[0, 0.5]`；一轮始终悬空、另外三轮持续支撑时稳态约0.433，在方向系数为1时对应奖励率约 `-0.1083`；两轮持续悬空时上限为 `-0.125`。本项鼓励各腿均衡参与支撑，允许轮流抬腿；四轮的悬空比例都相等时惩罚为0，包括全部悬空，因此必须结合已有接地奖励和独立超时项使用。它不增加传感器或策略观测。`Metrics/wheel_air_ratio_mean`、`Metrics/wheel_air_ratio_max_mean`、`Metrics/wheel_air_ratio_std_mean`记录未乘方向系数的历史比例及不均衡程度，`Metrics/wheel_air_time_imbalance_gate_mean`记录门控均值。初始权重与时间常数尚需训练对照。
 
 另已实现两项可选代价，但**未向任何任务的 rewards 配置添加条目，包括零权重条目**：
 

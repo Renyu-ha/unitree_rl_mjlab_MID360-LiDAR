@@ -168,6 +168,34 @@ class WheelAirTimeImbalanceTests(unittest.TestCase):
     torch.testing.assert_close(new.air_ratio[1], before[1])
     self.assertIs(manager.get_term_cfg("legacy").func, wheel_air_time_timeout)
 
+  def test_configured_support_terms_allow_normal_turning_steps_but_penalize_idle_leg(self):
+    env = self.make_env([[30.] * 4] * 2, commands=[[.4, 0., .2]] * 2)
+    env.scene["feet_ground_contact"] = env.scene["contact"]
+    rewards = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2-StepUp-Finetune").rewards
+    balance_cfg = rewards["wheel_air_time_imbalance"]
+    balance = wheel_air_time_imbalance(balance_cfg, env)
+    timeout_cfg, bonus_cfg = rewards["wheel_air_time_timeout"], rewards["wheel_contact_bonus"]
+    data = env.scene["contact"].data
+    # Normal diagonal stepping: each swing lasts .3 s. The second environment
+    # leaves the same leg permanently unsupported throughout the six seconds.
+    for step in range(300):
+      support = torch.tensor([
+        [1., 0., 0., 1.] if (step // 15) % 2 == 0 else [0., 1., 1., 0.],
+        [1., 1., 1., 0.],
+      ])
+      data.force[..., 2] = -30. * support
+      data.found.copy_(support)
+      data.current_air_time.copy_(torch.where(
+        support.bool(), 0., data.current_air_time + env.step_dt))
+      balance_reward = balance(env, **balance_cfg.params) * balance_cfg.weight
+    timeout_reward = timeout_cfg.func(env, **timeout_cfg.params) * timeout_cfg.weight
+    bonus_reward = bonus_cfg.func(env, **bonus_cfg.params) * bonus_cfg.weight
+    torch.testing.assert_close(bonus_reward, torch.zeros(2))
+    torch.testing.assert_close(timeout_reward, torch.tensor([0., -.125]))
+    self.assertLess(abs(balance_reward[0].item()), .02)
+    self.assertGreater(abs(balance_reward[1].item()), 4 * abs(balance_reward[0].item()))
+    self.assertLess((balance_reward + timeout_reward)[1].item(), -.17)
+
   def test_invalid_parameters_and_missing_command_do_not_mutate_history(self):
     env = self.make_env([[30.] * 4])
     term = self.make_term(env)
@@ -208,9 +236,9 @@ class WheelAirTimeImbalanceTests(unittest.TestCase):
           cfg = load_env_cfg(task, play=play)
           term = cfg.rewards["wheel_air_time_imbalance"]
           self.assertIs(term.func, wheel_air_time_imbalance)
-          self.assertEqual(term.weight, -.5)
+          self.assertEqual(term.weight, -.25)
           self.assertEqual(term.params, {
-            "sensor_name": "feet_ground_contact", "time_constant": .5,
+            "sensor_name": "feet_ground_contact", "time_constant": 1.,
             "force_threshold": 5., "command_name": "twist", "command_x_threshold": .1,
             "command_y_scale": .1, "command_yaw_scale": .2, "direction_score_type": "rational",
           })
