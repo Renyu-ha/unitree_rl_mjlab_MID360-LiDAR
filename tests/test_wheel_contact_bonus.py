@@ -39,13 +39,13 @@ class WheelContactBonusTests(unittest.TestCase):
     torch.testing.assert_close(env.extras["log"]["Metrics/all_wheels_grounded_ratio"],
                                torch.tensor(.25))
 
-  def test_forward_reverse_and_smooth_direction_scores_without_rewarding_in_place_motion(self):
+  def test_forward_reverse_and_continuous_direction_scores_without_rewarding_in_place_motion(self):
     env = self.make_env([[30.] * 4] * 9, commands=[
       [.4, 0., 0.], [-.4, 0., 0.], [0., 0., 0.], [0., .3, 0.],
       [0., 0., .3], [.4, .2, 0.], [.4, 0., .2], [.4, .01, .01], [-.4, -.01, -.01],
     ])
     torch.testing.assert_close(self.reward(env), torch.tensor([
-      1., 1., 0., 0., 0., .2, .5, .98765432, .98765432,
+      1., 1., 0., 0., 0., 1 / 3, .5, 1 / 1.15, 1 / 1.15,
     ]))
     torch.testing.assert_close(env.extras["log"]["Metrics/wheel_contact_bonus_active_ratio"],
                                torch.tensor(6 / 9))
@@ -60,7 +60,7 @@ class WheelContactBonusTests(unittest.TestCase):
     torch.testing.assert_close(self.reward(env), torch.tensor([0., 0., .25, .5, 1., 1., 1.]))
 
   def test_lateral_and_yaw_scores_decay_continuously_and_symmetrically(self):
-    expected = torch.tensor([1., .94117647, .8, .5, .2])
+    expected = torch.tensor([1., .8, 2 / 3, .5, 1 / 3])
     for column, commands in (
       (1, [0., .025, .05, .1, .2]), (2, [0., .05, .1, .2, .4]),
     ):
@@ -76,7 +76,7 @@ class WheelContactBonusTests(unittest.TestCase):
       [.4, 0., .03999], [.4, 0., .04], [.4, 0., .04001],
     ])
     values = self.reward(env)
-    self.assertTrue((values > .95).all())
+    self.assertTrue((values > .83).all())
     self.assertLess(float((values[1:] - values[:-1]).abs().max()), .0001)
 
   def test_direction_scales_can_relax_the_same_command(self):
@@ -92,8 +92,8 @@ class WheelContactBonusTests(unittest.TestCase):
     ])
     rational = self.reward(env)
     exponential = self.reward(env, direction_score_type="exponential")
-    torch.testing.assert_close(rational, torch.tensor([1., 2 / 3, 1 / 3]))
-    torch.testing.assert_close(exponential, torch.tensor([1., .60653066, .13533528]))
+    torch.testing.assert_close(rational, torch.tensor([1., .5, 1 / 3]))
+    torch.testing.assert_close(exponential, torch.tensor([1., .36787944, .13533528]))
     self.assertTrue((rational[1:] > exponential[1:]).all())
 
   def test_force_threshold_and_current_contact_filter_light_or_stale_contacts(self):

@@ -142,6 +142,8 @@ def wheel_contact_bonus(
   touchdown only earns reward while supporting the robot; it cannot erase the
   reward lost during suspension. Commanded longitudinal motion ramps the reward
   on; a rational or exponential score reduces it as lateral/yaw commands grow.
+  Both scores use the sum of absolute normalized commands, not squared commands.
+  With rational decay, either direction scale alone gives a score of one half.
   Rational decay retains more support incentive during turns at the same scales.
   Use commands rather than actual motion, so yaw drift cannot switch it off.
   """
@@ -162,13 +164,13 @@ def wheel_contact_bonus(
   if command is None:
     raise ValueError("Wheel contact bonus requires a velocity command")
   motion_weight = ((command[:, 0].abs() - command_x_threshold) / command_x_ramp).clamp(0.0, 1.0)
-  direction_error = (
-    (command[:, 1] / command_y_scale).square()
-    + (command[:, 2] / command_yaw_scale).square()
+  direction_magnitude = (
+    (command[:, 1] / command_y_scale).abs()
+    + (command[:, 2] / command_yaw_scale).abs()
   )
   direction_score = (
-    (1.0 + direction_error).reciprocal()
-    if direction_score_type == "rational" else torch.exp(-direction_error)
+    (1.0 + direction_magnitude).reciprocal()
+    if direction_score_type == "rational" else torch.exp(-direction_magnitude)
   )
   gate = motion_weight * direction_score
   env.extras["log"]["Metrics/wheel_support_fraction"] = fraction.mean()
