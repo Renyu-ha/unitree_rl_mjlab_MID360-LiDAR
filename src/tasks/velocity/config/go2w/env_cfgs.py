@@ -6,7 +6,7 @@ action definitions. Observation history follows the corresponding G1 stage.
 """
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Literal
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -424,7 +424,8 @@ def _make_go2w_env_cfg(
     rel_world_envs=base_twist.rel_world_envs,
     rel_forward_envs=base_twist.rel_forward_envs,
     init_velocity_prob=base_twist.init_velocity_prob,
-    ranges=base_twist.ranges, viz=base_twist.viz,
+    ranges=mdp.DeadzoneVelocityCommandCfg.Ranges(**asdict(base_twist.ranges)),
+    viz=mdp.DeadzoneVelocityCommandCfg.VizCfg(**asdict(base_twist.viz)),
   )
   cfg.commands["twist"] = twist
   twist.rel_standing_envs = 0.03 if v2 else 0.05

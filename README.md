@@ -88,7 +88,7 @@ python scripts/train.py Unitree-G1-Rough --env.scene.num-envs=4096
 
 ```bash
 python scripts/train.py Unitree-G1-Flat \
-  --gpu-ids 0 1 \
+  --gpu-ids "[0,1]" \
   --env.scene.num-envs=4096
 ```
 
@@ -263,7 +263,7 @@ cd deploy/robots/g1/build
 | 参数 | 说明 |
 |------|------|
 | `--env.scene.num-envs` | 并行环境数量，越大越快，需 GPU 内存支持 |
-| `--gpu-ids` | 多 GPU 训练，如 `--gpu-ids 0 1` |
+| `--gpu-ids` | GPU 列表，如单卡 `--gpu-ids "[1]"`、多卡 `--gpu-ids "[0,1]"` |
 | `--agent.resume` | 从上次 checkpoint 继续训练 |
 | `--agent.seed` | 随机种子，用于复现 |
 | `--env.rewards` | 奖励函数参数覆盖 |

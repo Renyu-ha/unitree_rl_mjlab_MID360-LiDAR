@@ -61,7 +61,7 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2 \
   --env.observations.critic.nan-policy=error
 ```
 
-默认使用GPU 0、W&B项目 `go2w_mid360`，模型保留本地，日志位于 `logs/rsl_rl/go2w_perceptive/`。纯本地日志追加 `--agent.logger=tensorboard`。选择显卡可用 `--gpu-ids 0`；CPU检查用 `--gpu-ids=None`。首次安装或更换后端后的首次运行可能编译Warp内核，后续复用缓存。
+默认使用GPU 0、W&B项目 `go2w_mid360`，模型保留本地，日志位于 `logs/rsl_rl/go2w_perceptive/`。纯本地日志追加 `--agent.logger=tensorboard`。选择显卡使用列表语法，如 `--gpu-ids "[0]"` 或第二张卡 `--gpu-ids "[1]"`；CPU检查用 `--gpu-ids=None`。首次安装或更换后端后的首次运行可能编译Warp内核，后续复用缓存。
 
 自定义W&B项目可追加 `--agent.wandb-project=项目名`，提前按自己的账号登录。实时查看追加 `--viewer=viser --viewer-host=0.0.0.0 --viewer-port=8096`，浏览器访问训练机的 8096 端口。可视化只同步选定环境，有额外同步开销。
 

@@ -14,18 +14,20 @@ SGS 根据 [A Balanced Data Diet，arXiv:2610.12465](https://arxiv.org/abs/2610.
 在已安装本项目依赖的环境里，从仓库根目录运行：
 
 ```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --gpu-ids 0 --agent.seed=0
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --gpu-ids "[0]" --agent.seed=0
 ```
 
 使用相同种子、环境数量、PPO 参数和训练预算运行均匀对照：
 
 ```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene.num-envs=4096 --gpu-ids 0 --agent.seed=0
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene.num-envs=4096 --gpu-ids "[0]" --agent.seed=0
 ```
 
 任务默认继承 v2 的 PPO、镜像增强、奖励、动作、720 维 Actor 历史输入和 MID360 观测。运行名分别为 `v2_sgs`、`v2_uniform_bank`，日志仍在 `logs/rsl_rl/go2w_perceptive/` 下。
 
 当前 SGS 专用 Runner 支持**单训练进程/单 GPU**。多进程会明确报错，避免只保存 rank 0 的统计却宣称完整恢复。原有任务的多 GPU 路径不变。
+
+GPU 编号使用带引号的 Python 列表语法：第二张卡写 `--gpu-ids "[1]"`。入口启用了 mjlab 的集合字面量解析，不能写成 `--gpu-ids 1`。未提前限制 `CUDA_VISIBLE_DEVICES` 时，`[1]` 选择物理 GPU 1；启动器将其映射为进程内的 `cuda:0`，因此日志显示 `cuda:0` 属于正常情况。
 
 ## 固定场景库
 

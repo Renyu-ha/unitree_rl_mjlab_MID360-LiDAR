@@ -178,6 +178,8 @@ class DeadzoneVelocityCommandTests(unittest.TestCase):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play).commands["twist"]
           self.assertIsInstance(cfg, DeadzoneVelocityCommandCfg)
+          self.assertIs(type(cfg.ranges), DeadzoneVelocityCommandCfg.Ranges)
+          self.assertIs(type(cfg.viz), DeadzoneVelocityCommandCfg.VizCfg)
           # SGS extends this command with a terrain/profile bank; its real reset
           # lifecycle is covered in test_sgs rather than this command-only stub.
           if type(cfg) is DeadzoneVelocityCommandCfg:

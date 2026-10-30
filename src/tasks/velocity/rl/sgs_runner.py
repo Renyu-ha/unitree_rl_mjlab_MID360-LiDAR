@@ -9,7 +9,7 @@ from .go2w_runner import Go2WOnPolicyRunner
 class Go2WSGSRunner(Go2WOnPolicyRunner):
   def __init__(self, *args, **kwargs):
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-      raise ValueError("Go2W SGS currently requires one training process; use --gpu-ids 0. "
+      raise ValueError("Go2W SGS currently requires one training process; use a single GPU, e.g. --gpu-ids '[0]'. "
         "Per-rank sampler checkpointing is not implemented.")
     super().__init__(*args, **kwargs)
 
