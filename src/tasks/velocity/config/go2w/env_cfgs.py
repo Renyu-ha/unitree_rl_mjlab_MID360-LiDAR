@@ -50,10 +50,10 @@ TERRAIN_PLATFORM_WIDTHS = {
     "hf_pyramid_slope_inv": 2.5,
   },
   "v2": {
-    "pyramid_stairs": 2.0,
-    "pyramid_stairs_inv": 2.0,
-    "hf_pyramid_slope": 2.0,
-    "hf_pyramid_slope_inv": 2.0,
+    "pyramid_stairs": 3.0,
+    "pyramid_stairs_inv": 3.0,
+    "hf_pyramid_slope": 3.0,
+    "hf_pyramid_slope_inv": 3.0,
   },
 }
 
@@ -92,14 +92,25 @@ def _terrain_cfg(play: bool, stage: str):
   )
   terrain.sub_terrains["pyramid_stairs"] = replace(
     terrain.sub_terrains["pyramid_stairs"], proportion=0.05 if stepup else (0.30 if v1 else 0.14),
-    step_height_range=(0.14, 0.14) if play else ((0.04, 0.16) if v1 else (0.04, 0.14)),
-    step_width=0.45 if v1 else 0.40,
+    step_height_range=(0.14, 0.14) if play else ((0.04, 0.20) if v1 else (0.04, 0.20)),
+    step_width=0.45 if v1 else 0.35,
   )
   terrain.sub_terrains["pyramid_stairs_inv"] = replace(
     terrain.sub_terrains["pyramid_stairs_inv"],
     proportion=0.60 if stepup else (0.20 if v1 else 0.30),
-    step_height_range=(0.14, 0.14) if play else ((0.03, 0.14) if v1 else (0.04, 0.18)),
-    step_width=0.45 if v1 else 0.40,
+    step_height_range=(0.14, 0.14) if play else ((0.03, 0.20) if v1 else (0.04, 0.20)),
+    step_width=0.45 if v1 else 0.35,
+  )
+  terrain.sub_terrains["pyramid_stairs_2"] = replace(
+      terrain.sub_terrains["pyramid_stairs"], proportion=0.05 if stepup else (0.30 if v1 else 0.14),
+      step_height_range=(0.14, 0.14) if play else ((0.04, 0.16) if v1 else (0.04, 0.16)),
+      step_width=0.30 if v1 else 0.25,
+    )
+  terrain.sub_terrains["pyramid_stairs_inv_2"] = replace(
+    terrain.sub_terrains["pyramid_stairs_inv"],
+    proportion=0.60 if stepup else (0.20 if v1 else 0.30),
+    step_height_range=(0.14, 0.14) if play else ((0.03, 0.18) if v1 else (0.04, 0.18)),
+    step_width=0.30 if v1 else 0.25,
   )
   terrain.sub_terrains["hf_pyramid_slope"] = replace(
     terrain.sub_terrains["hf_pyramid_slope"],
@@ -283,7 +294,7 @@ def _make_go2w_env_cfg(
       terms={
         "base_ang_vel": ObservationTermCfg(
           func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"},
-          noise=Unoise(n_min=-ang_noise, n_max=ang_noise),
+          noise=Unoise(n_min=-ang_noise, n_max=ang_noise), scale=0.25
         ),
         "projected_gravity": ObservationTermCfg(
           func=mdp.projected_gravity, noise=Unoise(n_min=-gravity_noise, n_max=gravity_noise),
@@ -298,7 +309,7 @@ def _make_go2w_env_cfg(
         "joint_vel": ObservationTermCfg(
           func=mdp.joint_vel_rel,
           params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
-          noise=Unoise(n_min=-vel_noise, n_max=vel_noise),
+          noise=Unoise(n_min=-vel_noise, n_max=vel_noise), scale=0.05
         ),
         "actions": ObservationTermCfg(func=mdp.last_action),
         "height_scan": ObservationTermCfg(
@@ -316,7 +327,7 @@ def _make_go2w_env_cfg(
       history_length=1, concatenate_terms=True, enable_corruption=False,
       terms={
         "base_ang_vel": ObservationTermCfg(
-          func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"},
+          func=mdp.builtin_sensor, params={"sensor_name": "robot/imu_ang_vel"}, scale=0.25
         ),
         "projected_gravity": ObservationTermCfg(func=mdp.projected_gravity),
         "command": ObservationTermCfg(func=mdp.generated_commands, params={"command_name": "twist"}),
@@ -327,7 +338,7 @@ def _make_go2w_env_cfg(
         ),
         "joint_vel": ObservationTermCfg(
           func=mdp.joint_vel_rel,
-          params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)},
+          params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS, preserve_order=True)}, scale=0.05
         ),
         "actions": ObservationTermCfg(func=mdp.last_action),
         "height_scan": ObservationTermCfg(
@@ -344,14 +355,14 @@ def _make_go2w_env_cfg(
               "wheel_height_FL", "wheel_height_FR", "wheel_height_RL", "wheel_height_RR",
             ),
           },
-          scale=5.0,
+          scale=2.0,
         ),
         # "foot_air_time": ObservationTermCfg(func=mdp.foot_air_time, params={"sensor_name": "feet_ground_contact"}),
         "foot_contact": ObservationTermCfg(func=mdp.foot_contact, params={"sensor_name": "feet_ground_contact"}),
         "foot_contact_forces": ObservationTermCfg(func=mdp.foot_contact_forces_b, params={"sensor_name": "feet_ground_contact"}),
         "wheel_vel": ObservationTermCfg(
           func=mdp.joint_vel_rel,
-          params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS, preserve_order=True)}, scale=0.1,
+          params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS, preserve_order=True)}, scale=0.05,
         ),
       },
     ),
@@ -401,9 +412,24 @@ def _make_go2w_env_cfg(
   )
 
   # ------------------------------ Commands ------------------------------
-  twist = cfg.commands["twist"]
+  base_twist = cfg.commands["twist"]
+  twist = mdp.DeadzoneVelocityCommandCfg(
+    entity_name=base_twist.entity_name,
+    resampling_time_range=base_twist.resampling_time_range,
+    debug_vis=base_twist.debug_vis,
+    heading_command=base_twist.heading_command,
+    heading_control_stiffness=base_twist.heading_control_stiffness,
+    rel_standing_envs=base_twist.rel_standing_envs,
+    rel_heading_envs=base_twist.rel_heading_envs,
+    rel_world_envs=base_twist.rel_world_envs,
+    rel_forward_envs=base_twist.rel_forward_envs,
+    init_velocity_prob=base_twist.init_velocity_prob,
+    ranges=base_twist.ranges, viz=base_twist.viz,
+  )
+  cfg.commands["twist"] = twist
   twist.rel_standing_envs = 0.03 if v2 else 0.05
-  twist.rel_heading_envs = 0.8
+  twist.rel_heading_envs = 0.7
+  twist.rel_forward_envs = 0.1
   if play:
     if stage == "flat":
       twist.ranges.lin_vel_x = (-0.5, 1.0)
@@ -473,42 +499,42 @@ def _configure_rewards(
     "track_linear_velocity": RewardTermCfg(
       func=mdp.track_linear_velocity,
       weight=2.0 if stepup else (1.5 if perceptive else 1.0),
-      params={"command_name": "twist", "std": 0.5},
+      params={"command_name": "twist", "std": 0.4},
     ),
     "track_angular_velocity": RewardTermCfg(
       func=mdp.track_angular_velocity,
       weight=1.15 if stepup else (0.75 if v2 else (0.75 if perceptive else 1.0)),
-      params={"command_name": "twist", "std": 0.5},
+      params={"command_name": "twist", "std": 0.38},
     ),
 
     # Body and default posture.
     "body_orientation_l2": RewardTermCfg(
-      func=mdp.body_orientation_l2, weight=-0.7,
+      func=mdp.body_orientation_l2, weight=-0.3,
       params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",))},
     ),
     "body_ang_vel": RewardTermCfg(
       func=mdp.body_angular_velocity_penalty,
-      weight=-0.10 if v2 else (-0.08 if perceptive else -0.05),
+      weight=-0.10 if v2 else (-0.04 if perceptive else -0.05),
       params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",))},
     ),
     "pose": RewardTermCfg(
       func=mdp.variable_posture, weight=0.75,
       params={
         "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS),
-        "command_name": "twist", "walking_threshold": 0.1, "running_threshold": 0.6,
+        "command_name": "twist", "walking_threshold": 0.1, "running_threshold": 0.5,
         "std_standing": {
-          r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.1,
-          r".*(FR|FL|RR|RL)_calf_joint.*": 0.1,
+          r".*(FR|FL|RR|RL)_hip_joint.*": 0.025,
+          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.15,
+          r".*(FR|FL|RR|RL)_calf_joint.*": 0.15,
         },
         "std_walking": {
           r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.2,
-          r".*(FR|FL|RR|RL)_calf_joint.*": 0.25,
+          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.25,
+          r".*(FR|FL|RR|RL)_calf_joint.*": 0.35,
         },
         "std_running": {
           r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.3,
+          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
           r".*(FR|FL|RR|RL)_calf_joint.*": 0.45,
         },
       },
@@ -521,11 +547,11 @@ def _configure_rewards(
       params={"asset_cfg": SceneEntityCfg("robot", actuator_names=LEG_ACTUATORS)},
     ),
     "joint_vel_l2": RewardTermCfg(
-      func=mdp.joint_vel_l2, weight=-5.0e-6,
+      func=mdp.joint_vel_l2, weight=-5.0e-5,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
     "joint_acc_l2": RewardTermCfg(
-      func=mdp.joint_acc_l2, weight=-2.5e-7,
+      func=mdp.joint_acc_l2, weight=-5.0e-7,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)},
     ),
     "joint_pos_limits": RewardTermCfg(
@@ -535,54 +561,54 @@ def _configure_rewards(
 
     # Wheel joints. Physical joint_acc is distinct from action differences.
     "wheel_torques_l2": RewardTermCfg(
-      func=mdp.joint_torques_l2, weight=-5.0e-6,
+      func=mdp.joint_torques_l2, weight=-7.5e-6,
       params={"asset_cfg": SceneEntityCfg("robot", actuator_names=WHEEL_ACTUATORS)},
     ),
     "wheel_speed": RewardTermCfg(
-      func=mdp.joint_vel_l2, weight=-1e-5,
+      func=mdp.joint_vel_l2, weight=-1.0e-5,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
     ),
     "wheel_acc_l2": RewardTermCfg(
-      func=mdp.joint_acc_l2, weight=-2.5e-8,
+      func=mdp.joint_acc_l2, weight=-7.5e-8,
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=WHEEL_JOINTS)},
     ),
 
     # Policy actions.
     "action_rate_l2": RewardTermCfg(
-      func=mdp.action_rate_l2, weight=-0.02 if v2 else (-0.04 if perceptive else -0.05),
+      func=mdp.action_rate_l2, weight=-0.03 if v2 else (-0.04 if perceptive else -0.05),
     ),
 
     # Ground contact, rolling consistency and collisions.
     # Per-wheel products must align body/joint values with the contact sensor columns.
-    "wheel_contact_bonus": RewardTermCfg(
-      func=mdp.wheel_contact_bonus, weight=0.25,
-      params={
-        "sensor_name": "feet_ground_contact", "force_threshold": 5.0,
-        "command_name": "twist", "command_x_threshold": 0.1,
-        "command_y_cutoff": 0.02, "command_yaw_cutoff": 0.04,
-      },
-    ),
-    "wheel_air_time_timeout": RewardTermCfg(
-      func=mdp.wheel_air_time_timeout, weight=-0.5,
+    "wheel_stumble": RewardTermCfg(
+      func=mdp.wheel_stumble, weight=-1.0,
       params={
         "sensor_name": "feet_ground_contact",
-        "threshold": 0.7 if stepup else 0.5, "ramp_time": 0.25,
+        "force_ratio": 3.0, "min_horizontal_force": 1.0,
       },
     ),
     "wheel_air_time_memory": RewardTermCfg(
-      func=mdp.wheel_air_time_memory, weight=-0.25,
+      func=mdp.wheel_air_time_memory, weight=-1.0,
       params={
         "sensor_name": "feet_ground_contact",
         "threshold": 0.7 if stepup else 0.5, "ramp_time": 0.25,
-        "recovery_rate": 2.0,
+        "recovery_rate": 1.5,
+      },
+    ),
+    "wheel_contact_bonus": RewardTermCfg(
+      func=mdp.wheel_contact_bonus, weight=0.35,
+      params={
+        "sensor_name": "feet_ground_contact", "force_threshold": 5.0,
+        "command_name": "twist", "command_x_threshold": 0.0,
+        "command_y_cutoff": 0.09, "command_yaw_cutoff": 0.09,
       },
     ),
     "wheel_lateral_slide": RewardTermCfg(
-      func=mdp.wheel_lateral_slide, weight=-0.5,
+      func=mdp.wheel_lateral_slide, weight=-0.75,
       params={
         "sensor_name": "feet_ground_contact",
         "body_cfg": SceneEntityCfg("robot", body_names=WHEEL_BODIES, preserve_order=True),
-        "slip_deadband": 0.04, "contact_threshold": 1.0,
+        "slip_deadband": 0.04, "contact_threshold": 5.0,
       },
     ),
     "wheel_spin_contact": RewardTermCfg(
@@ -600,8 +626,12 @@ def _configure_rewards(
       params={"sensor_name": "feet_ground_contact", "command_name": "twist", "command_threshold": 0.1},
     ),
     "self_collisions": RewardTermCfg(
-      func=mdp.self_collision_cost, weight=-2.5 if v2 else (-2.0 if perceptive else -1.0),
+      func=mdp.self_collision_cost, weight=-2.0 if v2 else (-2.0 if perceptive else -1.0),
       params={"sensor_name": "self_collision", "force_threshold": 10.0},
+    ),
+    "undesired_contact": RewardTermCfg(
+      func=mdp.undesired_contacts, weight=-3.0,
+      params={"sensor_name": "nonfoot_ground_touch", "force_threshold": 5.0},
     ),
 
     # Standing commands.
@@ -618,6 +648,31 @@ def _configure_rewards(
     # Failure termination (timeouts are excluded by is_terminated).
     "is_terminated": RewardTermCfg(func=mdp.is_terminated, weight=-200.0),
   }
+  cfg.rewards["forward_velocity_floor"] = RewardTermCfg(
+    func=mdp.forward_velocity_floor, weight=-0.75,
+    params={"min_velocity": 0.22, "command_name": "twist", "command_threshold": 0.1},
+  )
+  cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
+    func=mdp.yaw_rate_l2_when_straight, weight=-0.90,
+    params={"command_name": "twist", "command_x_threshold": 0.1,
+      "command_y_threshold": 0.1, "command_yaw_threshold": 0.1},
+  )
+  cfg.rewards["landing_edge_penalty"] = RewardTermCfg(
+    func=mdp.feet_landing_edge_penalty,
+    weight=-0.5,
+    params={
+      "contact_sensor_name": "feet_ground_contact",
+      "terrain_sensor_name": "terrain_scan_mid360",
+      "command_name": "twist",
+      "edge_threshold": 0.06,
+      "command_threshold": 0.1,
+      **SCAN,
+      "miss_value": 5.0,
+      "asset_cfg": SceneEntityCfg(
+        "robot", site_names=WHEEL_SITES, preserve_order=True,
+      ),
+    },
+  )
   if stepup:
     # StepUp adds forward progress and straight-line stability terms.
     cfg.rewards["forward_velocity_floor"] = RewardTermCfg(
@@ -709,8 +764,8 @@ def _configure_perceptive_v2_curriculum(cfg: ManagerBasedRlEnvCfg, *, play: bool
       {
         "step": 0,
         "lin_vel_x": (-0.1, 0.45),
-        "lin_vel_y": (-0.1, 0.1),
-        "ang_vel_z": (-0.15, 0.15),
+        "lin_vel_y": (-0.15, 0.15),
+        "ang_vel_z": (-0.2, 0.2),
       },
       {
         "step": 4000 * 24,

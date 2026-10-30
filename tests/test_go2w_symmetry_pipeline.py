@@ -55,20 +55,27 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
         self.assertEqual(batch.old_distribution_params[0].shape[0], n)
 
   def test_real_runner_updates_actor_and_critic_from_mirrored_rows_then_restores_and_exports(self):
+    self._check_training_task("Unitree-Go2W-Perceptive-Rough-v2")
+
+  def test_gait_runner_updates_both_networks_then_restores_and_exports_phase(self):
+    self._check_training_task("Unitree-Go2W-Perceptive-Rough-v2-Gait")
+
+  def _check_training_task(self, task):
     previous_threads = torch.get_num_threads()
     torch.set_num_threads(2)
-    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
+    cfg = load_env_cfg(task)
     cfg.seed, cfg.scene.num_envs = 23, 4
     env = None
     try:
       env = ManagerBasedRlEnv(cfg, device="cpu")
       wrapped = RslRlVecEnvWrapper(env, clip_actions=None)
-      plain_cfg = asdict(load_rl_cfg("Unitree-Go2W-Perceptive-Rough-v2"))
+      plain_cfg = asdict(load_rl_cfg(task))
       # Keep the production 512/256/128 networks, 24 steps, 5 epochs, 4 batches.
       runner = Go2WOnPolicyRunner(wrapped, deepcopy(plain_cfg), log_dir=None, device="cpu")
       report, first_state, first_storage, first_updated = self._trace_learning(runner)
       self._compare_without_augmentation(wrapped, plain_cfg, first_state, first_storage, first_updated, report)
       self._check_checkpoint_and_export(runner, wrapped, plain_cfg, report)
+      report["task"] = task
       print("GO2W_SYMMETRY_PIPELINE_OK", json.dumps(report), flush=True)
     finally:
       if env is not None:
@@ -133,8 +140,9 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
         torch.testing.assert_close(getattr(batch, field), source.flatten(0, 1)[indices])
       original = deepcopy(batch)
       original_augment(batch, n)
-      self.assertEqual(batch.observations["actor"].shape, (2 * n, 720))
-      self.assertEqual(batch.observations["critic"].shape, (2 * n, 263))
+      for group in ("actor", "critic"):
+        width = env.observation_manager.group_obs_dim[group][0]
+        self.assertEqual(batch.observations[group].shape, (2 * n, width))
       transform = env._go2w_symmetry
       for group in ("actor", "critic"):
         torch.testing.assert_close(batch.observations[group][:n], original.observations[group])
@@ -240,7 +248,9 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
     self.assertEqual(normalizer_counts, [(96, 96), (192, 192)])
     self.assertEqual(alg.actor.distribution.std_param.numel(), 16)
     report["normalizer_counts"] = normalizer_counts
-    report["batch_shapes"] = {"actor": [48, 720], "critic": [48, 263], "actions": [48, 16]}
+    report["batch_shapes"] = {group: [48, env.observation_manager.group_obs_dim[group][0]]
+                              for group in ("actor", "critic")}
+    report["batch_shapes"]["actions"] = [48, 16]
     return report, state["initial_state"], state["initial_storage"], (
       state["first_updated"], state["first_updated_critic"])
 
@@ -288,6 +298,13 @@ class Go2WSymmetryPipelineTests(unittest.TestCase):
       with torch.inference_mode():
         expected = restored.get_inference_policy()(sample).numpy()
       model = onnx.load(Path(directory) / "policy.onnx")
+      if "phase" in env.unwrapped.cfg.observations["actor"].terms:
+        metadata = {item.key: item.value for item in model.metadata_props}
+        contract = json.loads(metadata["go2w_deploy_contract"])
+        self.assertEqual(contract["observation_dim"], 726)
+        self.assertEqual(contract["observations"]["phase"]["params"],
+                         {"period": .6, "command_name": "base_velocity"})
+        self.assertEqual(contract["observations"]["phase"]["history_length"], 3)
       onnx.checker.check_model(model)
       actual = ReferenceEvaluator(model).run(None, {model.graph.input[0].name: sample["actor"].numpy()})[0]
       np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)

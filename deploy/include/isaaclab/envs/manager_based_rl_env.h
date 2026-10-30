@@ -47,19 +47,19 @@ public:
         observation_manager = std::make_unique<ObservationManager>(cfg["observations"], this);
     }
 
-    void reset()
+    void reset(bool refresh_robot = true)
     {
         global_phase = 0;
         episode_length = 0;
-        robot->update();
+        if (refresh_robot) robot->update();
         action_manager->reset();
         observation_manager->reset();
     }
 
-    void step()
+    void step(bool refresh_robot = true)
     {
         episode_length += 1;
-        robot->update();
+        if (refresh_robot) robot->update();
         auto obs = observation_manager->compute();
         auto action = alg->act(obs);
         action_manager->process_action(action);

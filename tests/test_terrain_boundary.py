@@ -33,7 +33,7 @@ class TerrainBoundaryTests(unittest.TestCase):
 
   def test_go2w_variants_enable_boundary_timeout_for_train_and_play(self):
     tasks = [task for task in list_tasks() if task.startswith("Unitree-Go2W-")]
-    self.assertEqual(len(tasks), 6)
+    self.assertEqual(len(tasks), 7)
     for task in tasks:
       for play in (False, True):
         with self.subTest(task=task, play=play):

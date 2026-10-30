@@ -74,8 +74,8 @@ class Go2WSymmetryTests(unittest.TestCase):
         config = asdict(load_rl_cfg(task))["algorithm"]["symmetry_cfg"]
         self.assertTrue(config["use_data_augmentation"])
         self.assertFalse(config["use_mirror_loss"])
-        self.assertNotIn("phase", env.cfg.observations["actor"].terms)
-        self.assertNotIn("phase", env.cfg.observations["critic"].terms)
+        self.assertEqual("phase" in env.cfg.observations["actor"].terms, task.endswith("-Gait"))
+        self.assertEqual("phase" in env.cfg.observations["critic"].terms, task.endswith("-Gait"))
         self.assertNotIn("foot_air_time", env.cfg.observations["critic"].terms)
         self.assertTrue(next(s for s in env.cfg.scene.sensors if s.name == "feet_ground_contact").track_air_time)
 

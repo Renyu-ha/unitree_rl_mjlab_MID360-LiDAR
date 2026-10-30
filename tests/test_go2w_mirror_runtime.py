@@ -100,9 +100,15 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
                              list(robot.WHEEL_JOINTS))
 
   def test_physical_reflection_matches_actual_actions_observation_history_and_every_reward(self):
+    self._check_task_reflection("Unitree-Go2W-Perceptive-Rough-v2-StepUp-Finetune")
+
+  def test_gait_physical_reflection_matches_shifted_phase_and_every_restored_reward(self):
+    self._check_task_reflection("Unitree-Go2W-Perceptive-Rough-v2-Gait")
+
+  def _check_task_reflection(self, task):
     for xml in (robot.GO2W_CYLINDER_XML, robot.GO2W_MESH_XML):
       with self.subTest(model=xml.name), patch.object(robot, "GO2W_XML", xml):
-        cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2-StepUp-Finetune")
+        cfg = load_env_cfg(task)
         cfg.seed, cfg.scene.num_envs = 7, 2
         # Isolate the coordinate mapping from random terrain/DR and sensor corruption.
         cfg.scene.terrain.terrain_type = "plane"
@@ -187,6 +193,9 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
       # tests extraction/ordering even when there are no physical contacts in air.
       # Native contact sensors report the wheel-on-terrain force (negative Z).
       force = torch.tensor([[.3, .6, -3.], [0., 0., 0.], [-.2, .8, -5.], [1., -.4, -8.]])
+      if frame == 2:
+        # A horizontal wheel-wall contact must also preserve the stumble cost.
+        force[0] = torch.tensor([30., 40., -5.])
       found = torch.tensor(([0., 0., 1., 1.], [1., 0., 1., 1.], [1., 0., 0., 1.])[frame])
       force = force * found[:, None]
       forces = torch.stack((force, force[FOOT_PERM] * POLAR))
@@ -195,6 +204,14 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
       for slot in contact._slots:
         foot = LEGS.index(slot.primary_name[:2])
         value = forces[:, foot] if slot.field_name == "force" else found[:, foot, None]
+        compiled = env.sim.mj_model.sensor(slot.sensor_name)
+        start, width = int(compiled.adr[0]), int(compiled.dim[0])
+        env.sim.data.sensordata[:, start:start + width] = value
+      for slot in env.scene["nonfoot_ground_touch"]._slots:
+        # A brief body-ground hit must be detected through the real history buffer.
+        hit = float(frame == 1 and slot.primary_name == "base_link_collision0")
+        test_force = env.cfg.rewards["undesired_contact"].params["force_threshold"] + 1.
+        value = torch.tensor([[test_force, 0., 0.]]).repeat(2, 1) * hit if slot.field_name == "force" else hit
         compiled = env.sim.mj_model.sensor(slot.sensor_name)
         start, width = int(compiled.adr[0]), int(compiled.dim[0])
         env.sim.data.sensordata[:, start:start + width] = value
@@ -214,6 +231,8 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
       for sensor_name in ("terrain_scan", "terrain_scan_mid360"):
         data = env.scene[sensor_name].data
         grid = torch.arange(187.).reshape(11, 17) * .002 + frame * .01
+        if frame == 1:
+          grid[:, ::2] += .14  # Exercise landing near a terrain edge.
         data.distances.fill_(1.)
         data.hit_pos_w[..., 2] = torch.stack((grid.flatten(), grid.flip(0).flatten()))
       # Acceleration and torque marker values expose joint/actuator ID confusion.
@@ -228,6 +247,9 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
       env.command_manager.get_term("twist").vel_command_b[:] = torch.cat(
         (command, command * torch.tensor([1., -1., -1.])))
       env.episode_length_buf[:] = frame + 1
+      if "foot_gait" in env.cfg.rewards:
+        period = env.cfg.rewards["foot_gait"].params["period"]
+        env.episode_length_buf[1] += round(period / (2 * env.step_dt))
       env.termination_manager.terminated[:] = frame == 2
       observations = env.observation_manager.compute(update_history=True)
       for group, values in observations.items():
@@ -240,6 +262,13 @@ class Go2WMirrorRuntimeTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(value).all(), name)
         if torch.any(value != 0):
           nonzero_rewards.add(name)
+        if name == "angular_momentum":
+          # The supplied wheel inertial tensors are not exact left/right mirrors.
+          # Check the real sensor calculation; algebraic reflection is tested separately.
+          raw = env.scene[term.params["sensor_name"]].data
+          torch.testing.assert_close(value, raw.square().sum(-1))
+          print("GO2W_GAIT_ANGMOM_ASSET_DIFFERENCE", frame, value.tolist(), flush=True)
+          continue
         torch.testing.assert_close(value[:1], value[1:], atol=2e-5, rtol=2e-5,
                                    msg=lambda msg: f"{name}, frame {frame}: {msg}")
     self.assertEqual(nonzero_rewards, set(rewards.active_terms), "Every reward must be exercised")

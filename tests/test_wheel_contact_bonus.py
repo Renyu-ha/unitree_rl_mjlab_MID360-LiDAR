@@ -143,6 +143,9 @@ class WheelContactBonusTests(unittest.TestCase):
       for play in (False, True):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
+          if task.endswith("-Gait"):
+            self.assertNotIn("wheel_contact_bonus", cfg.rewards)
+            continue
           term = cfg.rewards["wheel_contact_bonus"]
           self.assertIs(term.func, wheel_contact_bonus)
           self.assertEqual(term.weight, .25)

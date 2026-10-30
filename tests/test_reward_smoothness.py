@@ -153,7 +153,7 @@ class TemporalRewardTests(unittest.TestCase):
           cfg = load_env_cfg(task, play=play)
           slide = cfg.rewards["wheel_lateral_slide"]
           self.assertIs(slide.func, wheel_lateral_slide)
-          self.assertEqual(slide.weight, -.5)
+          self.assertEqual(slide.weight, -.75)
           self.assertEqual(slide.params["sensor_name"], "feet_ground_contact")
           self.assertEqual(slide.params["body_cfg"].body_names,
                            cfg.rewards["wheel_spin_contact"].params["body_cfg"].body_names)

@@ -72,7 +72,18 @@ public:
     
     ~CtrlFSM()
     {
+        stop();
         states.clear();
+    }
+
+    void stop()
+    {
+        // Stop the recurrent loop before destroying states/policy threads.
+        fsm_thread_.reset();
+        if (currentState) {
+            currentState->exit();
+            currentState.reset();
+        }
     }
 
     std::vector<std::shared_ptr<BaseState>> states;

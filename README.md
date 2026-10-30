@@ -1,5 +1,7 @@
 # Unitree RL Mjlab — MID360 LiDAR 感知运动控制
 
+Go2W 现已由原 G1 框架适配部署入口，导出打包、DDS 仿真和实机步骤见 [Go2W 部署说明](doc/go2w_deploy_zh.md)。
+
 基于 [unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab) 扩展，在原有速度跟踪与动作模仿功能基础上，新增了面向 **Unitree MID360 LiDAR** 的感知运动控制训练方案，实现机器人在复杂地形（楼梯、坡道）下的 Sim2Real 部署。
 
 <div align="center">

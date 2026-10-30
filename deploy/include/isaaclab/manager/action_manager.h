@@ -13,6 +13,7 @@ namespace isaaclab
 class ActionTerm 
 {
 public:
+    virtual ~ActionTerm() = default;
     ActionTerm(YAML::Node cfg, ManagerBasedRLEnv* env): cfg(cfg), env(env) {}
 
     virtual int action_dim() = 0;

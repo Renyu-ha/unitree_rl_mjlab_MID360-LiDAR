@@ -39,6 +39,8 @@ Mjlab 结合了 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 的成熟高�
 
 Go2W 轮腿模型和 MID360 感知训练已加入，支持 12 个腿关节位置动作与 4 个轮子速度动作。仓库感知运控解析、训练/回放命令和验证范围见 [Go2W 迁移说明](doc/go2w_perceptive_zh.md)。
 
+Go2W 实机入口沿用原 G1 部署框架，导出打包、DDS 仿真、MID360 标定和启动步骤见 [Go2W 部署说明](doc/go2w_deploy_zh.md)。
+
 ### 1. 速度跟踪训练
 
 运行以下命令进行速度跟踪训练：

@@ -1,0 +1,462 @@
+go2w_deploy_schema: 1
+joint_ids_map:
+- 3
+- 4
+- 5
+- 0
+- 1
+- 2
+- 9
+- 10
+- 11
+- 6
+- 7
+- 8
+- 13
+- 12
+- 15
+- 14
+action_joint_names:
+- FL_hip_joint
+- FL_thigh_joint
+- FL_calf_joint
+- FR_hip_joint
+- FR_thigh_joint
+- FR_calf_joint
+- RL_hip_joint
+- RL_thigh_joint
+- RL_calf_joint
+- RR_hip_joint
+- RR_thigh_joint
+- RR_calf_joint
+- FL_wheel_joint
+- FR_wheel_joint
+- RL_wheel_joint
+- RR_wheel_joint
+step_dt: 0.02
+observation_dim: 720
+stiffness:
+- 20.0
+- 20.0
+- 40.0
+- 20.0
+- 20.0
+- 40.0
+- 20.0
+- 20.0
+- 40.0
+- 20.0
+- 20.0
+- 40.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+damping:
+- 1.0
+- 1.0
+- 2.0
+- 1.0
+- 1.0
+- 2.0
+- 1.0
+- 1.0
+- 2.0
+- 1.0
+- 1.0
+- 2.0
+- 2.0
+- 2.0
+- 2.0
+- 2.0
+default_joint_pos:
+- -0.10000000149011612
+- 0.8999999761581421
+- -1.7999999523162842
+- 0.10000000149011612
+- 0.8999999761581421
+- -1.7999999523162842
+- -0.10000000149011612
+- 0.8999999761581421
+- -1.7999999523162842
+- 0.10000000149011612
+- 0.8999999761581421
+- -1.7999999523162842
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+commands:
+  base_velocity:
+    ranges:
+      lin_vel_x:
+      - -0.2
+      - 0.3
+      lin_vel_y:
+      - -0.15
+      - 0.15
+      ang_vel_z:
+      - -0.3
+      - 0.3
+actions:
+  JointPositionAction:
+    joint_ids:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    scale:
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    - 0.5
+    offset:
+    - -0.10000000149011612
+    - 0.8999999761581421
+    - -1.7999999523162842
+    - 0.10000000149011612
+    - 0.8999999761581421
+    - -1.7999999523162842
+    - -0.10000000149011612
+    - 0.8999999761581421
+    - -1.7999999523162842
+    - 0.10000000149011612
+    - 0.8999999761581421
+    - -1.7999999523162842
+    clip: null
+  JointVelocityAction:
+    joint_ids:
+    - 12
+    - 13
+    - 14
+    - 15
+    scale:
+    - 20.0
+    - 20.0
+    - 20.0
+    - 20.0
+    offset:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    clip: null
+observations:
+  base_ang_vel:
+    params: {}
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  projected_gravity:
+    params: {}
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  command:
+    params:
+      command_name: base_velocity
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  joint_pos_rel:
+    params:
+      asset_cfg:
+        joint_ids:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+        - 10
+        - 11
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  joint_vel_rel:
+    params:
+      asset_cfg:
+        joint_ids:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+        - 10
+        - 11
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  actions:
+    params: {}
+    clip: null
+    scale:
+    - 1.0
+    history_length: 3
+  height_scan:
+    params:
+      size: 187
+      miss_value: 5.0
+    clip: null
+    scale:
+    - 0.20000000298023224
+    history_length: 3
+  wheel_vel:
+    params: {}
+    clip: null
+    scale:
+    - 0.05000000074505806
+    history_length: 3
+perception_required: true
+height_scan:
+  size_x_m: 1.6
+  size_y_m: 1.0
+  resolution_m: 0.1
+  x_offset_m: 0.35
+  y_offset_m: 0.0
+  miss_value_m: 5.0
+  memory_max_age_s: 0.8
+  mask_visible: true
+  visible_x_min_m: 0.25
+  visible_x_max_m: 1.15
+  visible_y_abs_m: 0.5
+  visible_mask:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+  - 1
+onnx_metadata:
+  run_path: local
+  joint_names: FL_hip_joint,FL_thigh_joint,FL_calf_joint,FL_wheel_joint,FR_hip_joint,FR_thigh_joint,FR_calf_joint,FR_wheel_joint,RL_hip_joint,RL_thigh_joint,RL_calf_joint,RL_wheel_joint,RR_hip_joint,RR_thigh_joint,RR_calf_joint,RR_wheel_joint
+  joint_stiffness: 20.000,20.000,40.000,2.000,20.000,20.000,40.000,2.000,20.000,20.000,40.000,2.000,20.000,20.000,40.000,2.000
+  joint_damping: 1.000,1.000,2.000,2.000,1.000,1.000,2.000,2.000,1.000,1.000,2.000,2.000,1.000,1.000,2.000,2.000
+  default_joint_pos: -0.100,0.900,-1.800,0.000,0.100,0.900,-1.800,0.000,-0.100,0.900,-1.800,0.000,0.100,0.900,-1.800,0.000
+  command_names: twist
+  observation_names: base_ang_vel,projected_gravity,command,joint_pos,joint_vel,actions,height_scan,wheel_vel
+  observation_terms_scale: 1.000,1.000,1.000,1.000,1.000,1.000,0.200,0.050
+  observation_terms_flatten_history_dim: 1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000
+  observation_terms_history_length: 3.000,3.000,3.000,3.000,3.000,3.000,3.000,3.000
+  observation_terms_clip: -inf;inf,-inf;inf,-inf;inf,-inf;inf,-inf;inf,-inf;inf,-inf;inf,-inf;inf
+  action_scale: 0.500,0.500,0.500,0.500,0.500,0.500,0.500,0.500,0.500,0.500,0.500,0.500,20.000,20.000,20.000,20.000
+  action_joint_names: FL_hip_joint,FL_thigh_joint,FL_calf_joint,FR_hip_joint,FR_thigh_joint,FR_calf_joint,RL_hip_joint,RL_thigh_joint,RL_calf_joint,RR_hip_joint,RR_thigh_joint,RR_calf_joint,FL_wheel_joint,FR_wheel_joint,RL_wheel_joint,RR_wheel_joint
+  action_types: position,position,position,position,position,position,position,position,position,position,position,position,velocity,velocity,velocity,velocity
+  action_offset: -0.100,0.900,-1.800,0.100,0.900,-1.800,-0.100,0.900,-1.800,0.100,0.900,-1.800,0.000,0.000,0.000,0.000
+  action_clip: None
+  actor_history_length: '3'
+  observation_layout: term_major_history
+  control_dt: '0.02'
+  policy_kind: smoke_zero
+  go2w_deploy_contract: '{"go2w_deploy_schema":1,"joint_ids_map":[3,4,5,0,1,2,9,10,11,6,7,8,13,12,15,14],"action_joint_names":["FL_hip_joint","FL_thigh_joint","FL_calf_joint","FR_hip_joint","FR_thigh_joint","FR_calf_joint","RL_hip_joint","RL_thigh_joint","RL_calf_joint","RR_hip_joint","RR_thigh_joint","RR_calf_joint","FL_wheel_joint","FR_wheel_joint","RL_wheel_joint","RR_wheel_joint"],"step_dt":0.02,"observation_dim":720,"stiffness":[20.0,20.0,40.0,20.0,20.0,40.0,20.0,20.0,40.0,20.0,20.0,40.0,0.0,0.0,0.0,0.0],"damping":[1.0,1.0,2.0,1.0,1.0,2.0,1.0,1.0,2.0,1.0,1.0,2.0,2.0,2.0,2.0,2.0],"default_joint_pos":[-0.10000000149011612,0.8999999761581421,-1.7999999523162842,0.10000000149011612,0.8999999761581421,-1.7999999523162842,-0.10000000149011612,0.8999999761581421,-1.7999999523162842,0.10000000149011612,0.8999999761581421,-1.7999999523162842,0.0,0.0,0.0,0.0],"commands":{"base_velocity":{"ranges":{"lin_vel_x":[-0.2,0.3],"lin_vel_y":[-0.15,0.15],"ang_vel_z":[-0.3,0.3]}}},"actions":{"JointPositionAction":{"joint_ids":[0,1,2,3,4,5,6,7,8,9,10,11],"scale":[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5],"offset":[-0.10000000149011612,0.8999999761581421,-1.7999999523162842,0.10000000149011612,0.8999999761581421,-1.7999999523162842,-0.10000000149011612,0.8999999761581421,-1.7999999523162842,0.10000000149011612,0.8999999761581421,-1.7999999523162842],"clip":null},"JointVelocityAction":{"joint_ids":[12,13,14,15],"scale":[20.0,20.0,20.0,20.0],"offset":[0.0,0.0,0.0,0.0],"clip":null}},"observations":{"base_ang_vel":{"params":{},"clip":null,"scale":[1.0],"history_length":3},"projected_gravity":{"params":{},"clip":null,"scale":[1.0],"history_length":3},"command":{"params":{"command_name":"base_velocity"},"clip":null,"scale":[1.0],"history_length":3},"joint_pos_rel":{"params":{"asset_cfg":{"joint_ids":[0,1,2,3,4,5,6,7,8,9,10,11]}},"clip":null,"scale":[1.0],"history_length":3},"joint_vel_rel":{"params":{"asset_cfg":{"joint_ids":[0,1,2,3,4,5,6,7,8,9,10,11]}},"clip":null,"scale":[1.0],"history_length":3},"actions":{"params":{},"clip":null,"scale":[1.0],"history_length":3},"height_scan":{"params":{"size":187,"miss_value":5.0},"clip":null,"scale":[0.20000000298023224],"history_length":3},"wheel_vel":{"params":{},"clip":null,"scale":[0.05000000074505806],"history_length":3}},"perception_required":true,"height_scan":{"size_x_m":1.6,"size_y_m":1.0,"resolution_m":0.1,"x_offset_m":0.35,"y_offset_m":0.0,"miss_value_m":5.0,"memory_max_age_s":0.8,"mask_visible":true,"visible_x_min_m":0.25,"visible_x_max_m":1.15,"visible_y_abs_m":0.5,"visible_mask":[0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1]}}'

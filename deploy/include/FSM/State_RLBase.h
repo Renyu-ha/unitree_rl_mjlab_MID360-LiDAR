@@ -2,6 +2,7 @@
 // All rights reserved.
 
 #pragma once
+#include <atomic>
 
 #include "FSMState.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -22,12 +23,16 @@ public:
     void exit();
 
 private:
+    // Optional per-robot state; the G1 implementation keeps using the original members.
+    struct RobotExtension;
+    std::shared_ptr<RobotExtension> extension_;
+    void policy_loop();
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::unique_ptr<LidarHeightScanUpdater> lidar_updater_;
     bool dry_run_no_actuation_ = false;
 
     std::thread policy_thread;
-    bool policy_thread_running = false;
+    std::atomic<bool> policy_thread_running{false};
 };
 
 REGISTER_FSM(State_RLBase)

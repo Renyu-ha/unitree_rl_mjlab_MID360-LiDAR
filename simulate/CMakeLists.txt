@@ -1,46 +1,34 @@
 cmake_minimum_required(VERSION 3.16)
-project(unitree_mujoco)
-
-if (CMAKE_BUILD_TYPE MATCHES "Debug")
-  message("Debug mode")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g -O0 -fPIC")
-else()
-  message("Release mode")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -O3 -DNDEBUG -fPIC")
-endif()
-
-list(APPEND CMAKE_PREFIX_PATH "/opt/unitree_robotics/lib/cmake")
-find_package(unitree_sdk2 REQUIRED)
+project(unitree_mujoco LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(UNITREE_BUILD_GUI "Build the original MuJoCo graphical simulator" ON)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/UnitreeSDK.cmake")
 find_package(Boost REQUIRED COMPONENTS program_options)
-
-
-include_directories(
-  mujoco/include
-  mujoco/simulate
-  src/lodepng
-)
-link_directories(mujoco/lib)
-
-file(GLOB SIM_SRC
-  src/joystick/joystick.cc
-
-  # exclude mujoco/simulate/main.cc
-  mujoco/simulate/glfw_*.cc
-  mujoco/simulate/platform_*.cc
-  mujoco/simulate/simulate.cc
-  src/lodepng/lodepng.cpp
-)
-
-link_libraries(
-  pthread
-  mujoco
-  glfw
-  yaml-cpp
-  unitree_sdk2
-  boost_program_options
-  fmt
-)
-
-add_executable(unitree_mujoco ${SIM_SRC} src/main.cc)
-
-add_executable(jstest src/joystick/jstest.cc src/joystick/joystick.cc)
+find_package(yaml-cpp REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(fmt REQUIRED)
+set(MUJOCO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mujoco" CACHE PATH "Matching MuJoCo headers, library and simulate sources")
+find_library(MUJOCO_LIBRARY NAMES mujoco libmujoco.so.3.3.6 PATHS "${MUJOCO_DIR}/lib" NO_DEFAULT_PATH REQUIRED)
+file(SIZE "${MUJOCO_LIBRARY}" _mj_library_size)
+if(_mj_library_size LESS 512)
+  file(READ "${MUJOCO_LIBRARY}" _mj_link)
+  string(STRIP "${_mj_link}" _mj_link)
+  set(MUJOCO_LIBRARY "${MUJOCO_DIR}/lib/${_mj_link}")
+endif()
+add_executable(unitree_mujoco src/main.cc)
+target_include_directories(unitree_mujoco PRIVATE
+  "${MUJOCO_DIR}/include" src ../deploy/robots/go2w/include)
+target_link_libraries(unitree_mujoco PRIVATE unitree_sdk2 Boost::program_options yaml-cpp Eigen3::Eigen fmt::fmt "${MUJOCO_LIBRARY}" pthread)
+if(UNITREE_BUILD_GUI)
+  find_package(glfw3 REQUIRED)
+  file(GLOB SIM_SRC "${MUJOCO_DIR}/simulate/glfw_*.cc" "${MUJOCO_DIR}/simulate/platform_*.cc")
+  target_sources(unitree_mujoco PRIVATE ${SIM_SRC} "${MUJOCO_DIR}/simulate/simulate.cc" src/lodepng/lodepng.cpp src/joystick/joystick.cc)
+  target_include_directories(unitree_mujoco PRIVATE "${MUJOCO_DIR}/simulate" src/lodepng)
+  target_link_libraries(unitree_mujoco PRIVATE glfw)
+  add_executable(jstest src/joystick/jstest.cc src/joystick/joystick.cc)
+else()
+  target_compile_definitions(unitree_mujoco PRIVATE UNITREE_HEADLESS_ONLY)
+  target_sources(unitree_mujoco PRIVATE src/joystick/joystick.cc)
+endif()
+set_target_properties(unitree_mujoco PROPERTIES BUILD_RPATH "${MUJOCO_DIR}/lib")

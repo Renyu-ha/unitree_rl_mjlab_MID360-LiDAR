@@ -125,7 +125,7 @@ class Go2WOrderingTests(unittest.TestCase):
                     for name, term in group.items()]
           for scope, name, term in terms:
             ordered = scope == "observation" or (
-              scope == "reward" and name in ("wheel_lateral_slide", "wheel_spin_contact"))
+              scope == "reward" and name in ("wheel_lateral_slide", "wheel_spin_contact", "foot_swing_height"))
             for selection in term.params.values():
               if isinstance(selection, SceneEntityCfg):
                 self.assertEqual(selection.preserve_order, ordered, (task, scope, name, selection))

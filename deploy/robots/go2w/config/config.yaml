@@ -1,0 +1,49 @@
+# Same Passive -> FixStand -> Velocity flow as the original G1 deployment.
+# Policy defaults to the bundle produced by scripts/prepare_go2w_deploy.py.
+FSM:
+  _:
+    Passive: {id: 1}
+    FixStand: {id: 2}
+    Velocity: {id: 3, type: RLBase}
+  Passive:
+    transitions: {FixStand: LT + up.on_pressed}
+    mode: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    kd: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1]
+  FixStand:
+    transitions: {Passive: LT + B.on_pressed, Velocity: RT + A.on_pressed}
+    # All arrays here use SDK order: FR, FL, RR, RL, then their wheels.
+    kp: [20, 20, 40, 20, 20, 40, 20, 20, 40, 20, 20, 40, 0, 0, 0, 0]
+    kd: [1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 2, 2, 2, 2]
+    ts: [0, 3]
+    qs:
+      - []
+      - [0.1, 0.9, -1.8, -0.1, 0.9, -1.8, 0.1, 0.9, -1.8, -0.1, 0.9, -1.8, 0, 0, 0, 0]
+  Velocity:
+    transitions: {Passive: LT + B.on_pressed}
+    policy_dir: config/policy/velocity/current
+    lidar:
+      topic: /utlidar/cloud_livox_mid360
+      frame_id: livox_frame
+      body_frame: base_link
+      pointcloud_timeout_ms: 300
+      min_observed_ratio: 0.05
+      # Independent nav_msgs/Odometry; twist is in child_frame_id=base_link.
+      # Do not depend on SportModeState after disabling built-in locomotion.
+      odometry_topic: /go2w/odometry
+      odometry_timeout_ms: 200
+      memory_mode: training_forward # pose is an opt-in change of memory semantics
+      # Replace with measured MID360 -> base_link extrinsics on the real robot.
+      extrinsics: {translation_m: [0, 0, 0], rpy_deg: [0, 0, 0]}
+      self_filter_boxes:
+        - [-0.26, 0.26, -0.13, 0.13, -0.12, 0.15]
+safety:
+  hardware_calibrated: false # Set true only after checking hardware, extrinsics and independent odometry.
+  command_timeout_ms: 50
+  lowstate_timeout_ms: 100
+  policy_timeout_ms: 60
+  max_tilt_rad: 1.0
+  # Protective fault thresholds; these do not silently clip policy actions.
+  max_wheel_speed_rad_s: 40
+  # Policy order: FL, FR, RL, RR. Check these against the actual hardware.
+  leg_position_min: [-1.0472, -1.5708, -2.7227, -1.0472, -1.5708, -2.7227, -1.0472, -0.5236, -2.7227, -1.0472, -0.5236, -2.7227]
+  leg_position_max: [1.0472, 3.4907, -0.83776, 1.0472, 3.4907, -0.83776, 1.0472, 4.5379, -0.83776, 1.0472, 4.5379, -0.83776]

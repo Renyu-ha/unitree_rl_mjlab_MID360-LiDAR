@@ -154,6 +154,9 @@ class WheelAirTimeMemoryTests(unittest.TestCase):
       for play in (False, True):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
+          if task.endswith("-Gait"):
+            self.assertNotIn("wheel_air_time_memory", cfg.rewards)
+            continue
           term = cfg.rewards["wheel_air_time_memory"]
           self.assertIs(term.func, wheel_air_time_memory)
           self.assertEqual(term.weight, -.25)

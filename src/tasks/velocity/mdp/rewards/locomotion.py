@@ -10,7 +10,7 @@ from mjlab.entity import Entity
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import BuiltinSensor, ContactSensor
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
 from mjlab.utils.lab_api.string import (
   resolve_matching_names_values,
 )
@@ -84,6 +84,39 @@ def body_orientation_l2(
     # Use root link projected gravity.
     xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
   return xy_squared
+
+
+def undesired_contacts(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  force_threshold: float = 1.0,
+) -> torch.Tensor:
+  """Count sensor primaries that hit terrain above the force threshold.
+
+  The configured sensor must exclude wheels and use one slot per primary.
+  Take each primary's maximum force norm over the physics-substep history,
+  so brief contacts are retained but repeated samples count only once.
+  Without history, use the current force. Norms work in either the contact
+  frame or world frame. Configure a negative reward weight.
+  """
+  if force_threshold < 0.0:
+    raise ValueError("force_threshold must be non-negative")
+  data = env.scene[sensor_name].data
+  if data.force_history is not None:
+    history = data.force_history
+    if history.ndim != 4 or history.shape[-1] != 3 or history.shape[2] == 0:
+      raise ValueError("Undesired contacts require force history shaped [B, N, H, 3]")
+    force_magnitude = history.norm(dim=-1).amax(dim=-1)
+  else:
+    force = data.force
+    if force is None or force.ndim != 3 or force.shape[-1] != 3:
+      raise ValueError("Undesired contacts require contact forces shaped [B, N, 3]")
+    force_magnitude = force.norm(dim=-1)
+  hit = force_magnitude > force_threshold
+  cost = hit.sum(dim=-1).float()
+  env.extras["log"]["Metrics/undesired_contact_count"] = cost.mean()
+  env.extras["log"]["Metrics/undesired_contact_ratio"] = hit.any(dim=-1).float().mean()
+  return cost
 
 
 def self_collision_cost(
@@ -206,6 +239,10 @@ def feet_gait(
     global_phase = ((env.episode_length_buf * env.step_dt) / period).unsqueeze(1)
     offsets = torch.as_tensor(offset, device=env.device, dtype=global_phase.dtype).view(1, -1)
     leg_phase = (global_phase + offsets) % 1.0
+    # Float32 may put an exact cycle boundary just below 1 instead of 0.
+    # Snap both stance boundaries consistently, including half-cycle mirrors.
+    leg_phase = torch.where(leg_phase > 1.0 - 1.e-6, 0.0, leg_phase)
+    leg_phase = torch.where(torch.abs(leg_phase - threshold) < 1.e-6, threshold, leg_phase)
     is_stance = (leg_phase < threshold)
     reward = (is_stance == is_contact).float().mean(dim=1)
     if command_name is not None:
@@ -229,6 +266,9 @@ class feet_swing_height:
       (env.num_envs, len(self.site_names)), device=env.device, dtype=torch.float32
     )
     self.step_dt = env.step_dt
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    self.peak_heights[slice(None) if env_ids is None else env_ids] = 0.0
 
   def __call__(
     self,
@@ -294,6 +334,27 @@ def _foot_pos_b(
   return quat_apply_inverse(
     root_quat_w.reshape(num_envs * num_feet, 4),
     rel_pos_w.reshape(num_envs * num_feet, 3),
+  ).reshape(num_envs, num_feet, 3)
+
+
+def _foot_pos_in_scan_frame(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+  sensor_name: str,
+) -> torch.Tensor:
+  """Match the ray grid's origin and alignment when locating foot sites."""
+  sensor = env.scene[sensor_name]
+  asset: Entity = env.scene[asset_cfg.name]
+  relative = asset.data.site_pos_w[:, asset_cfg.site_ids] - sensor.data.pos_w.unsqueeze(1)
+  if sensor.cfg.ray_alignment == "world":
+    return relative
+  quat = sensor.data.quat_w
+  if sensor.cfg.ray_alignment == "yaw":
+    quat = yaw_quat(quat)
+  num_envs, num_feet, _ = relative.shape
+  quat = quat.unsqueeze(1).expand(-1, num_feet, -1)
+  return quat_apply_inverse(
+    quat.reshape(num_envs * num_feet, 4), relative.reshape(num_envs * num_feet, 3),
   ).reshape(num_envs, num_feet, 3)
 
 
@@ -419,7 +480,14 @@ def feet_landing_edge_penalty(
   miss_value: float = 5.0,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-  """Penalize first contacts on cells with large local terrain height changes."""
+  """Penalize forward-motion landings near valid local terrain height changes.
+
+  Locate sites in the ray grid's aligned frame, including on pitched terrain.
+  Missing rays and sites outside the grid do not constitute terrain edges.
+  This uses the raw terrain sensor, before actor noise, dropout and memory.
+  """
+  if edge_threshold < 0.0 or command_threshold < 0.0:
+    raise ValueError("edge_threshold and command_threshold must be non-negative")
   contact_sensor: ContactSensor = env.scene[contact_sensor_name]
   command = env.command_manager.get_command(command_name)
   assert command is not None
@@ -434,28 +502,51 @@ def feet_landing_edge_penalty(
     y_offset_m=y_offset_m,
     miss_value=miss_value,
   )
-  foot_pos_b = _foot_pos_b(env, asset_cfg)
-  x_idx, y_idx = _nearest_scan_indices(foot_pos_b, x, y)
+  foot_pos_scan = _foot_pos_in_scan_frame(env, asset_cfg, terrain_sensor_name)
+  x_idx, y_idx = _nearest_scan_indices(foot_pos_scan, x, y)
+  inside = (
+    (foot_pos_scan[..., 0] >= x[0] - 1.e-6)
+    & (foot_pos_scan[..., 0] <= x[-1] + 1.e-6)
+    & (foot_pos_scan[..., 1] >= y[0] - 1.e-6)
+    & (foot_pos_scan[..., 1] <= y[-1] + 1.e-6)
+  )
+  ray_valid = (env.scene[terrain_sensor_name].data.distances >= 0).reshape_as(grid)
+  ray_valid = ray_valid & torch.isfinite(grid)
 
   center = _gather_height_grid(grid, x_idx, y_idx)
   x_left = _gather_height_grid(grid, torch.clamp(x_idx - 1, min=0), y_idx)
   x_right = _gather_height_grid(grid, torch.clamp(x_idx + 1, max=x.numel() - 1), y_idx)
   y_left = _gather_height_grid(grid, x_idx, torch.clamp(y_idx - 1, min=0))
   y_right = _gather_height_grid(grid, x_idx, torch.clamp(y_idx + 1, max=y.numel() - 1))
-  edge_score = torch.maximum(
-    torch.maximum(torch.abs(center - x_left), torch.abs(center - x_right)),
-    torch.maximum(torch.abs(center - y_left), torch.abs(center - y_right)),
+  center_valid = _gather_height_grid(ray_valid, x_idx, y_idx)
+  neighbor_valid = torch.stack((
+    _gather_height_grid(ray_valid, torch.clamp(x_idx - 1, min=0), y_idx),
+    _gather_height_grid(ray_valid, torch.clamp(x_idx + 1, max=x.numel() - 1), y_idx),
+    _gather_height_grid(ray_valid, x_idx, torch.clamp(y_idx - 1, min=0)),
+    _gather_height_grid(ray_valid, x_idx, torch.clamp(y_idx + 1, max=y.numel() - 1)),
+  ), dim=-1)
+  neighbors = torch.stack((x_left, x_right, y_left, y_right), dim=-1)
+  differences = torch.where(
+    center_valid.unsqueeze(-1) & neighbor_valid,
+    torch.abs(center.unsqueeze(-1) - neighbors), 0.0,
   )
+  edge_score = differences.amax(dim=-1)
 
   first_contact = contact_sensor.compute_first_contact(dt=env.step_dt).float()
+  if first_contact.shape != edge_score.shape:
+    raise ValueError("Landing contact columns must match the selected foot sites")
+  valid_landing = first_contact * (inside & center_valid).float()
   active = (command[:, 0] > command_threshold).float()
   cost = (
-    torch.sum(torch.square(torch.clamp(edge_score - edge_threshold, min=0.0)) * first_contact, dim=1)
+    torch.sum(torch.square(torch.clamp(edge_score - edge_threshold, min=0.0)) * valid_landing, dim=1)
     * active
   )
-  num_landings = torch.sum(first_contact)
-  edge_mean = torch.sum(edge_score * first_contact) / torch.clamp(num_landings, min=1)
+  num_landings = torch.sum(valid_landing)
+  edge_mean = torch.sum(edge_score * valid_landing) / torch.clamp(num_landings, min=1)
   env.extras["log"]["Metrics/landing_edge_score_mean"] = edge_mean
+  env.extras["log"]["Metrics/landing_edge_valid_ratio"] = (
+    num_landings / first_contact.sum().clamp_min(1)
+  )
   return cost
 
 

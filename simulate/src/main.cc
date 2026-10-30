@@ -1,3 +1,8 @@
+#include <cmath>
+#if defined(UNITREE_HEADLESS_ONLY)
+#include "go2w_headless.h"
+int main(int argc,char** argv) { return go2w_sim::main(argc,argv); }
+#else
 // Copyright 2021 DeepMind Technologies Limited
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +39,7 @@
 #include "array_safety.h"
 #include "unitree_sdk2_bridge.h"
 #include "param.h"
+#include "go2w_headless.h"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 #define NUM_MOTOR_IDL_GO 20
@@ -99,6 +105,14 @@ namespace
   // model and data
   mjModel *m = nullptr;
   mjData *d = nullptr;
+  std::unique_ptr<Go2WBridge> go2w_bridge;
+  mj::Simulate* active_sim = nullptr;
+  void step_physics() {
+    if (go2w_bridge) go2w_bridge->before_step(m,d);
+    mj_step(m,d);
+    if (go2w_bridge) go2w_bridge->after_step(m,d);
+  }
+
 
   // control noise variables
   mjtNum *ctrlnoise = nullptr;
@@ -356,6 +370,7 @@ namespace
           m = mnew;
           d = dnew;
           mj_forward(m, d);
+          if (go2w_bridge) go2w_bridge->reset_model(m,d);
 
           // allocate ctrlnoise
           free(ctrlnoise);
@@ -386,6 +401,7 @@ namespace
           m = mnew;
           d = dnew;
           mj_forward(m, d);
+          if (go2w_bridge) go2w_bridge->reset_model(m,d);
 
           // allocate ctrlnoise
           free(ctrlnoise);
@@ -462,7 +478,7 @@ namespace
               sim.speed_changed = false;
 
               // run single step, let next iteration deal with timing
-              mj_step(m, d);
+              step_physics();
               stepped = true;
             }
 
@@ -503,7 +519,7 @@ namespace
                 }
 
                 // call mj_step
-                mj_step(m, d);
+                step_physics();
                 stepped = true;
 
                 // break if reset
@@ -549,6 +565,7 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
     {
       sim->Load(m, d, filename);
       mj_forward(m, d);
+      if (param::config.robot=="go2w") go2w_bridge=std::make_unique<Go2WBridge>(m,d);
 
       // allocate ctrlnoise
       free(ctrlnoise);
@@ -565,6 +582,7 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
 
   // delete everything we allocated
   free(ctrlnoise);
+  if (go2w_bridge) { go2w_bridge->write_report(param::config.report,d->time); go2w_bridge.reset(); }
   mj_deleteData(d);
   mj_deleteModel(m);
 
@@ -573,6 +591,7 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
 
 void *UnitreeSdk2BridgeThread(void *arg)
 {
+  if (param::config.robot=="go2w") return nullptr;
   // Wait for mujoco data
   while (true)
   {
@@ -632,8 +651,9 @@ void user_key_cb(GLFWwindow* window, int key, int scancode, int act, int mods) {
       }
     }
     if(key==GLFW_KEY_BACKSPACE) {
-      mj_resetData(m, d);
-      mj_forward(m, d);
+      const std::lock_guard<std::recursive_mutex> lock(active_sim->mtx);
+      if (go2w_bridge) go2w_bridge->reset_model(m,d);
+      else { mj_resetData(m,d); mj_forward(m,d); }
     }
   }
 }
@@ -650,6 +670,17 @@ int main(int argc, char **argv)
     std::exit(1);
   }
 #endif
+
+  param::load(argc,argv,std::filesystem::path(getExecutableDir()).parent_path()/"config.yaml");
+  if (param::config.headless) {
+    try { return go2w_sim::run(); }
+    catch (const std::exception& error) {
+      std::cerr << "unitree_mujoco: " << error.what() << std::endl;
+      return 1;
+    }
+  }
+  if (param::config.robot=="go2w")
+    unitree::robot::ChannelFactory::Instance()->Init(param::config.domain_id,param::config.interface);
 
   // print version, check compatibility
   std::printf("MuJoCo version %s\n", mj_versionString());
@@ -670,19 +701,14 @@ int main(int argc, char **argv)
   mjvPerturb pert;
   mjv_defaultPerturb(&pert);
 
-  // Load simulation configuration
-  std::filesystem::path proj_dir = std::filesystem::path(getExecutableDir()).parent_path();
-  param::config.load_from_yaml(proj_dir / "config.yaml");
-  param::helper(argc, argv);
-  if(param::config.robot_scene.is_relative()) {
-    param::config.robot_scene = proj_dir.parent_path() / param::config.robot_scene;
-  }
+
 
   // simulate object encapsulates the UI
   auto sim = std::make_unique<mj::Simulate>(
     std::make_unique<mj::GlfwAdapter>(),
     &cam, &opt, &pert, /* is_passive = */ false);
 
+  active_sim=sim.get();
   std::thread unitree_thread(UnitreeSdk2BridgeThread, nullptr);
 
   // start physics thread
@@ -695,3 +721,5 @@ int main(int argc, char **argv)
   pthread_exit(NULL);
   return 0;
 }
+
+#endif

@@ -1,5 +1,7 @@
 # 仓库感知运控解析与 Go2W 训练迁移
 
+独立的 SGS 速度跟随任务、成功判据、训练对照及评估命令见 [Go2W SGS 训练](go2w_sgs_zh.md)。
+
 本分支固定 mjlab `8bb2bc9e`、MuJoCo 3.16.0、MuJoCo-Warp 3.16.0.post1（上游 #1771/#1796 修复及 EPA 容量 64）、Warp 1.18.0、RSL-RL 5.5.1。安装采用 Conda + pip，具体步骤和核心版本约束见 [安装说明](setup_zh.md)。
 
 所有碰撞体使用零 margin；非轮/轮子接触维度与优先级分别为 `1/0` 和 `3/1`。轮碰撞默认使用圆柱，也提供原始 `wheel.stl` 网格版本，切换方法见下文；两种版本共用控制、奖励及自碰撞设置。
@@ -152,6 +154,31 @@ reward_rate = -0.25 * cost
 
 新项在站立、直行、转向和侧移时均更新并计算，沿用原air-time项的计罚范围；不使用方向评分。原项接地后其传感器计时仍立即清零，新项不会修改该计时器，两个惩罚独立。每个环境重置时只清空对应环境的额外记录。`Metrics/wheel_air_time_memory_max_mean`记录各环境最大额外时间记录的均值。所有奖励率由mjlab统一乘控制步长；参数训练效果仍需对照验证。
 
+2026-10-29 新增 `wheel_stumble`，在 Go2W V2 系列（含 StepUp、Step14 和 Gait）显式启用，初始权重 `-0.5`。复用 `feet_ground_contact` 的世界系合力和当前 `found`，无需增加传感器或观测。参考 [legged_gym 的 stumble 判据](https://github.com/leggedrobotics/legged_gym/blob/master/legged_gym/envs/base/legged_robot.py)：
+
+```text
+horizontal_force = norm(force_xy)
+stumbled = (found > 0) and (horizontal_force > 1 N) and (horizontal_force > 5 * abs(force_z))
+cost = any(stumbled across wheels)
+reward_rate = -0.5 * float(cost)
+```
+
+`force_ratio=5.0` 和 `min_horizontal_force=1.0` 均在配置中显式给出。使用竖直力绝对值，兼容轮子对地形的负 Z 接触力；同一控制步多个轮子触发仍只计一次代价。所有运动方向和站立状态均检测，不加直行门控。`Metrics/wheel_stumble_ratio` 记录发生 stumble 的环境比例，`Metrics/wheel_stumble_wheel_fraction` 记录触发的轮子比例；奖励管理器统一乘控制步长，50 Hz 时触发一步的实际奖励为 `-0.01`。净合力判据可能漏掉轮子同时支撑地面并撞台阶的情况，需结合日志检查触发率；这组初始参数尚未经训练效果验证。
+
+2026-10-29 新增 `undesired_contact`，全部 Go2W 变体启用，初始权重 `-1.0`、接触力阈值 `1.0 N`。复用 `nonfoot_ground_touch`：primary 为排除四个轮子后的机身、髋部、大腿和小腿碰撞几何体，secondary 为地形，不包含机器人自碰撞。对每个碰撞几何体取最近四个物理子步（一个控制周期）内接触力模长的最大值，超过阈值计一次，再对这些几何体求和。同一几何体连续四个子步碰地不会重复计四次；短暂碰地后在控制周期末离地仍能被捕获。当前传感器按 geom 匹配，同一 body 的多个碰撞几何体分别计数。
+
+```text
+peak_force = max_over_substeps(norm(force_history))
+cost = count(peak_force > 1 N)
+reward_rate = -1.0 * cost
+```
+
+50 Hz 时，每个触发的非轮子碰撞几何体每控制步扣 `0.02`。`Metrics/undesired_contact_count` 记录触发几何体数量的环境均值，`Metrics/undesired_contact_ratio` 记录出现至少一次非轮子碰地的环境比例。无历史数据时函数退回当前接触力；现有配置保持四子步历史。该项与轮子撞侧面的 `wheel_stumble`、机器人内部碰撞的 `self_collisions` 分别计算，不改变观测或动作维度，初始参数仍需训练验证。
+
+2026-10-29 新增 Go2W V2 系列的 `landing_edge_penalty`，初始权重 `-1.0`，复用 `terrain_scan_mid360`、`feet_ground_contact` 和按 `FL/FR/RL/RR` 排列的四个轮芯 site。网格参数直接使用 `SCAN`（1.6 m × 1.0 m、0.1 m 分辨率、前移 0.35 m）。函数从原始射线结果读取地形，不经过 actor 观测的噪声、稀疏化和记忆缓存。仅在前进指令 `cmd_vx > 0.1 m/s` 且轮子首次重新接地时计算：取轮芯所在格与四邻格的最大高度差 `edge_score`，逐轮累加 `max(edge_score - 0.06, 0)^2`。例如单轮在高度差 0.14 m 的边缘重新落地，原始代价为 `0.0064`，50 Hz 时乘权重和步长后为 `-0.000128`，初始权重需要根据实际训练量级评估。
+
+地形查询使用传感器原点和射线对齐方式；Go2W 扫描采用 yaw 对齐，因此机身俯仰和横滚不会把轮芯错误映射到其他格。中心射线缺失、无效邻格和网格外轮芯不作为边缘处罚。`Metrics/landing_edge_score_mean` 记录有效落地处的平均高度变化，`Metrics/landing_edge_valid_ratio` 记录落地轮子中可查询网格的比例。该项约束落地位置；轮子持续贴地滚过边缘时不会触发，不能替代 `wheel_stumble`。
+
 另已实现两项可选代价，但**未向任何任务的 rewards 配置添加条目，包括零权重条目**：
 
 | 函数 | 定义 | 历史与重置 |
@@ -285,6 +312,44 @@ Go2W仅在Actor的模拟传感器观测声明噪声。指令和上一帧原始ac
 `tests/test_go2w_observation_noise.py` 使用原生ObservationManager和UniformNoiseCfg，核对所有六个任务的train/play噪声声明，以及受控随机数下的加噪、缩放、延迟和历史顺序；同时检查指令、action、Critic和原始数据不被加噪或原地改写。pose课程另验证原生严格大于阈值时才切换权重。
 
 本次提交前使用项目固定的MuJoCo-Warp 3.16.0.post1后端，全量126项CPU测试通过，包括持续悬空超时、真实状态镜像、Actor/Critic两轮PPO更新、checkpoint恢复和ONNX导出；ONNX参考执行与PyTorch输出通过一致性检查。镜像测试已加入非零的逐轮滞空计时，同时覆盖零指令时的超时惩罚。上述结果验证配置接入和数值流程，未评估长期训练表现。
+
+### 2.9 独立的G1奖励与相位对照任务（2026-10-27）
+
+新任务为 `Unitree-Go2W-Perceptive-Rough-v2-Gait`，环境差异和PPO运行名称集中在 `src/tasks/velocity/config/go2w/gait_env_cfg.py`。它调用Go2W私有V2构建器生成新配置，不改动原来的 `env_cfgs.py`、`rl_cfg.py` 或六个已注册任务的参数。地形、MID360感知、动作、已有同名奖励及PPO参数沿用当前Go2W V2；仅运行名称改为 `v2_gait`。当前基线用户设置的Actor action噪声±0.03、轮速缩放0.1和slide权重−0.75也一并继承。
+
+该任务包含G1 V2的全部奖励类型，唯一排除 `foot_slip`（普通足端平面打滑代价）。Go2W已有的关节代价、轮侧滑、轮空转和轮停车项继续保留。新增的四项如下，初值和高度目标沿用G1 V2；并未把已有Go2W同名项的权重全部改成G1权重：
+
+| 恢复项 | 初始权重 | 参数 |
+| --- | ---: | --- |
+| `angular_momentum` | −0.035 | `robot/root_angmom`，全机器人子树角动量的模平方，包含轮子 |
+| `foot_gait` | 0.5 | 周期0.6 s，支撑阈值0.56，指令活动阈值0.1 |
+| `foot_clearance` | −1.8 | 目标比当前最低轮心site高0.22 m，乘足端水平速度求和 |
+| `foot_swing_height` | −1.0 | 落地时评估摆动峰值，目标比当前最低轮心site高0.24 m |
+
+四轮接触与site均按FL、FR、RL、RR映射。步态offset为 `[0.0, 0.5, 0.5, 0.0]`，即FL/RR与FR/RL两组对角交替；支撑阶段要求接触，摆动阶段要求离地，以四轮匹配比例计分。0.56的支撑占比允许两组短暂共同接触。停止时相位观测清零，步态奖励按G1的指令阈值关闭。这里的高度是轮心site之间的相对高度，不是轮胎最低点离地间隙。
+
+只在新任务中删除 `wheel_air_time_timeout`、`wheel_air_time_memory`、`wheel_contact_bonus`；实现函数和原任务配置保留。接触计时仍启用，供G1步态、摆动峰值与soft_landing使用；不新增原生 `feet_air_time` 奖励，G1 V2本身也没有配置此项。
+
+训练课程同时恢复G1的两项高度奖励权重：超过8000×24控制步时，clearance由−1.8变为−1.4、swing由−1.0变为−0.75；超过14000×24后分别为−1.1、−0.5。已有pose和速度课程保持Go2W设置。play关闭课程，保持本文件配置的初始奖励权重。
+
+Actor/Critic都追加 `[sin(2πφ), cos(2πφ)]`，相位周期与步态奖励相同且不加噪。Actor维度变为726（3帧），Critic变为265（1帧）；Critic的 `foot_air_time` 观测继续关闭。原V2的720/263 checkpoint不能直接用于这个任务，应从头开始新对照实验。训练与播放示例：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-Gait
+python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-Gait --checkpoint-file path/to/model.pt
+```
+
+左右镜像会交换两组对角腿，所以必须同时令 `φ → φ+0.5`，即每个历史帧的sin/cos均取负。只换腿、保持相位会让镜像接触状态对应错误的奖励目标。Go2W镜像器根据实际四轮offset验证共同的零周期或半周期平移；周期、指令或接触顺序不一致时拒绝增强。原来的无相位任务仍使用原有映射。导出增加phase及实际period，沿用现有C++ phase观测入口。
+
+核对时还修正了共用 `feet_gait` 在周期边界处的float32取模误判，补充 `feet_swing_height.reset()`，避免局部episode重置后保留上一局的峰值。两种轮模型的真实镜像状态中，恢复奖励均被非零样本覆盖。原资产的轮惯性张量并非严格左右镜像，因此真实角动量平方在本次样本中的差异最高约0.104%；测试分别检查真实传感器计算和理想轴向向量镜像的不变性，没有修改资产或伪造对称角动量。
+
+新任务在完整生成地形、4环境、512/256/128网络上完成两轮原生PPO学习，24步/轮、共40次优化器更新；Actor和Critic的镜像样本均有非零梯度，保存恢复和带phase的ONNX导出通过。全量162项检查中159项通过、3项可选检查跳过；原有配置文件的字节校验保持不变。这验证接入与数值流程，新增权重和高度目标仍需训练对照评估。
+
+### 2.10 项目内的速度指令与独立死区（2026-10-30）
+
+`src/tasks/velocity/mdp/deadzone_velocity_command.py` 保存当前实际使用的 mjlab 速度指令完整副本，类名为 `DeadzoneVelocityCommand` 和 `DeadzoneVelocityCommandCfg`。Go2W 公共构建器将 `twist` 切换到该配置类，并显式保留原有全部配置字段；G1 等其他机器人仍使用原有指令类。项目内旧的 `mdp/velocity_command.py` 不参与这次切换。
+
+新副本在各轴独立应用固定死区：`abs(cmd_vx) < 0.1 m/s`、`abs(cmd_vy) < 0.1 m/s`、`abs(cmd_wz) < 0.1 rad/s` 分别清零，等于正负阈值及以上的值保留。采样后、heading/world 每步重算后和手动滑块覆盖后都应用相同三行判据，避免后续更新重新产生小指令。world 模式保留原始世界系参考，仅对最终机体系分量做死区；forward 模式原有的正向最小 0.3 m/s 和 heading/world 排除关系保持。初始速度写入和指令位移积分使用过滤后的实际输出。三轴命令维度和左右镜像规则均不变。
 
 ## 3. 安装与训练
 
@@ -516,7 +581,7 @@ ONNX 播放复用 mjlab 的观测、逐项历史及动作管理器；导出图�
 
 ## 4. 范围与验证
 
-当前提供 Go2W 的训练、回放和策略导出，保留六个 Go2W 任务及仓库其他机器人任务。Go2W 尚无实机控制程序；硬件对接需要 SDK 电机映射、轮速度下发、与训练一致的扫描网格和历史顺序、点云外参、完整位姿补偿及感知超时处理。模型尚未加入实际 MID360 负载质量。
+当前提供 Go2W 的训练、回放和策略导出，保留六个 Go2W 任务及仓库其他机器人任务。部署按原 G1 的目录、State_RLBase 和 unitree_mujoco 入口适配，包含电机映射、轮速下发、观测历史、扫描网格/记忆、SDK 包装器与超时处理，详见 [Go2W 部署说明](go2w_deploy_zh.md) 和 [Ubuntu 22.04 操作说明](../README_UBUNTU22_GO2W.md)。Linux 用户态 DDS 联调已覆盖正常流程和断流保护；电机方向、雷达外参、独立里程计和策略效果仍需实机核对。模型尚未加入实际 MID360 负载质量。
 
 回归检查集中在 `tests/`，覆盖模型与执行器、任务注册、观测和动作接口、轮接触奖励、感知记忆、ONNX、出生/重置净空、冻结碰撞与求解器状态，以及完整任务的 NaN 注入和转储容错。阶段性的迁移、容量/FMA 扫描和后端矩阵脚本已删除。后端算法来源、训练保护和当前验证边界见 [安装说明](setup_zh.md)；历史试验可从 Git 历史查看。
 

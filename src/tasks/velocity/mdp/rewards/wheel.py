@@ -88,6 +88,39 @@ def wheel_spin_contact(
   return (spin * contact).sum(dim=-1)
 
 
+def wheel_stumble(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  force_ratio: float = 5.0,
+  min_horizontal_force: float = 1.0,
+) -> torch.Tensor:
+  """Penalize any wheel contact dominated by horizontal rather than vertical force.
+
+  Follow legged_gym's stumble test on world-frame net contact forces. Absolute
+  vertical force makes the test independent of the wheel-on-terrain sign.
+  Require a current contact and a minimum horizontal force to ignore stale
+  readings and tiny contacts. Return one cost per environment, even when
+  multiple wheels stumble; configure a negative reward weight.
+  """
+  if force_ratio <= 0.0 or min_horizontal_force < 0.0:
+    raise ValueError("force_ratio must be positive and min_horizontal_force non-negative")
+  data = env.scene[sensor_name].data
+  force, found = data.force, data.found
+  if (force is None or found is None or found.ndim != 2
+      or force.shape != (*found.shape, 3)):
+    raise ValueError("Wheel stumble requires one world-frame net force and contact flag per wheel")
+  horizontal_force = force[..., :2].norm(dim=-1)
+  stumbled = (
+    (found > 0)
+    & (horizontal_force > min_horizontal_force)
+    & (horizontal_force > force_ratio * force[..., 2].abs())
+  )
+  cost = stumbled.any(dim=-1).to(force.dtype)
+  env.extras["log"]["Metrics/wheel_stumble_ratio"] = cost.mean()
+  env.extras["log"]["Metrics/wheel_stumble_wheel_fraction"] = stumbled.float().mean()
+  return cost
+
+
 def wheel_stand_still(
   env: ManagerBasedRlEnv,
   command_name: str,

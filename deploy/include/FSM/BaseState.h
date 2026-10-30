@@ -13,6 +13,7 @@ inline boost::bimap<int, std::string> FSMStringMap;
 class BaseState
 {
 public:
+    virtual ~BaseState() = default;
     BaseState(int state, std::string state_string) : state_(state) 
     {
         FSMStringMap.insert({state, state_string});

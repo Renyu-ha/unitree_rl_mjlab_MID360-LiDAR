@@ -133,8 +133,8 @@ class Go2WTests(unittest.TestCase):
             name = sensor.removeprefix("robot/")
             self.assertIn(name, available, (task, play, name))
             referenced.add(name)
-    self.assertEqual(referenced, {"imu_ang_vel", "imu_lin_vel"})
-    self.assertEqual(available, referenced | {"root_angmom"})
+    self.assertEqual(referenced, {"imu_ang_vel", "imu_lin_vel", "root_angmom"})
+    self.assertEqual(available, referenced)
 
   def test_go2w_configs_do_not_import_other_task_configs(self):
     config_dir = Path(go2w_env_cfgs.__file__).parent
@@ -386,7 +386,7 @@ class Go2WTests(unittest.TestCase):
 
   def test_registered_tasks_and_compatible_stages(self):
     tasks = [name for name in list_tasks() if name.startswith("Unitree-Go2W-")]
-    self.assertEqual(len(tasks), 6)
+    self.assertEqual(len(tasks), 9)
     schemas = []
     for task in tasks:
       cfg = load_env_cfg(task)
@@ -396,15 +396,15 @@ class Go2WTests(unittest.TestCase):
         self.assertEqual(group.terms["joint_pos"].params["asset_cfg"].joint_names, LEG_JOINTS)
         self.assertEqual(group.terms["wheel_vel"].params["asset_cfg"].joint_names, WHEEL_JOINTS)
       self.assertNotIn("foot_slip", cfg.rewards)
-      self.assertNotIn("foot_gait", cfg.rewards)
-      self.assertNotIn("foot_clearance", cfg.rewards)
+      self.assertEqual("foot_gait" in cfg.rewards, task.endswith("-Gait"))
+      self.assertEqual("foot_clearance" in cfg.rewards, task.endswith("-Gait"))
       self.assertNotIn("wheel_slip", cfg.rewards)
       self.assertIs(cfg.rewards["wheel_spin_contact"].func, wheel_spin_contact)
       for name in ("pose", "stand_still", "joint_pos_limits", "joint_acc_l2"):
         self.assertEqual(cfg.rewards[name].params["asset_cfg"].joint_names, LEG_JOINTS)
       self.assertIsNone(load_rl_cfg(task).clip_actions)
       if task != "Unitree-Go2W-Flat":
-        if "v2" in task:
+        if "v2" in task and not task.endswith("-Gait"):
           schemas.append([(g.history_length, tuple(g.terms)) for g in cfg.observations.values()])
         self.assertEqual(load_rl_cfg(task).experiment_name, "go2w_perceptive")
       else:
@@ -543,9 +543,13 @@ class Go2WTests(unittest.TestCase):
               b.pop("func")
               a["params"].pop("asset_cfg", None)
               b["params"].pop("asset_cfg", None)
-              if group == "critic" or term == "actions":
+              if group == "critic":
                 self.assertIsNone(a["noise"])
                 b["noise"] = None
+              elif term == "actions":
+                noise = actual.observations[group].terms[term].noise
+                self.assertEqual((noise.operation, noise.n_min, noise.n_max), ("add", -.03, .03))
+                b["noise"] = asdict(noise)
               if term == "foot_height":
                 # Go2W axle height now uses per-wheel terrain rays; G1 keeps world Z.
                 self.assertIs(actual.observations[group].terms[term].func,

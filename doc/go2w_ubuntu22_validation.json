@@ -1,0 +1,189 @@
+{
+  "date": "2026-10-26",
+  "environment": {
+    "host": "Windows",
+    "target": "Ubuntu 22.04 x86_64",
+    "compiler": "Zig/Clang GNU target; Ubuntu GCC 11 headers, glibc 2.35 and libstdc++ runtime",
+    "execution": "QEMU TCG with Ubuntu Base 22.04.5 userland and Alpine boot kernel",
+    "deadlines": "--relaxed-deadlines used for emulation; native production deadlines remain to be qualified",
+    "network": "loopback, multicast flag off (default Linux loopback flags), isolated nonzero domains",
+    "physics": "Normal standing uses MuJoCo 3.3.6 physics; fault injection, readonly and wheel mapping hold the home pose"
+  },
+  "wire_crc_python_reference": "passed; complete nonzero LowCmd/LowState fields and padding independence",
+  "active_subscription_shutdown_stress": {
+    "passed": true,
+    "closes_in_final_run": 20,
+    "additional_preceding_closes_per_framework": 40
+  },
+  "hardware_tested": false,
+  "trained_go2w_policy_included": false,
+  "limits": [
+    "Robot, real MID360 and real odometry were not tested",
+    "Hardware extrinsics, independent odometry, motor direction, payload and trained policy are required",
+    "Production real-time deadlines and the GUI window require target-machine validation"
+  ],
+  "builds": {
+    "controller": "passed",
+    "simulator_headless": "passed",
+    "simulator_gui": "passed",
+    "g1_reference_translation_unit": "passed"
+  },
+  "python_training_regressions": {
+    "passed": 13,
+    "onnxruntime": "1.22.0",
+    "cpp_training_height_memory_parity": "passed"
+  },
+  "release_relocation": {
+    "manifest_files": 1535,
+    "portable_scene_python310": "passed"
+  },
+  "dds_selfcheck": {
+    "startup_guards": {
+      "passed": true,
+      "smoke_policy_rejected": true,
+      "modified_contract_rejected": true,
+      "duplicate_writer_rejected": true
+    },
+    "normal": {
+      "simulation_seconds": 12.566,
+      "commands": 2472,
+      "states": 6283,
+      "clouds": 126,
+      "odometry": 629,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.268648,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "readonly": {
+      "simulation_seconds": 12.204,
+      "commands": 0,
+      "states": 6102,
+      "clouds": 123,
+      "odometry": 611,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "cloud_timeout": {
+      "simulation_seconds": 12.928,
+      "commands": 1580,
+      "states": 6464,
+      "clouds": 70,
+      "odometry": 647,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "odometry_timeout": {
+      "simulation_seconds": 13.21,
+      "commands": 4088,
+      "states": 6605,
+      "clouds": 133,
+      "odometry": 361,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "lowstate_timeout": {
+      "simulation_seconds": 12.818,
+      "commands": 1467,
+      "states": 3409,
+      "clouds": 129,
+      "odometry": 641,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "crc_timeout": {
+      "simulation_seconds": 12.484,
+      "commands": 8288,
+      "states": 6242,
+      "clouds": 125,
+      "odometry": 625,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    },
+    "wheel_mapping": {
+      "simulation_seconds": 12.45,
+      "commands": 5015,
+      "states": 6225,
+      "clouds": 125,
+      "odometry": 623,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 4,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        2,
+        1,
+        4,
+        3
+      ],
+      "passed": true
+    },
+    "stand_estop": {
+      "simulation_seconds": 12.968,
+      "commands": 1389,
+      "states": 6484,
+      "clouds": 130,
+      "odometry": 649,
+      "max_wheel_kp": 0,
+      "max_wheel_target": 0,
+      "min_base_height": 0.4,
+      "wheel_targets_sdk": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "passed": true
+    }
+  },
+  "source_sha256": {
+    "deploy\\robots\\go2w\\main.cpp": "9c2f89e8bd1483530d35d49e89869b8213e1bf4982111d3fdc1ffc02a9847a60",
+    "deploy\\robots\\go2w\\src\\State_RLBase.cpp": "2e8d35c73b9a2bff0a4684bb963c93c033629a5839e2259b1e841d8a706cc5d4",
+    "simulate\\src\\go2w_bridge.h": "ff1fa55b2934e9fa364cd5449ea0ff01d1f0833330eb1cb91084258299501778"
+  }
+}

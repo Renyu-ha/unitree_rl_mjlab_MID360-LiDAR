@@ -39,7 +39,7 @@ def make_manager(play=False):
 
 
 class Go2WObservationNoiseTests(unittest.TestCase):
-  def test_every_train_and_play_variant_declares_noise_only_for_actor_sensors(self):
+  def test_every_variant_keeps_configured_actor_noise_and_clean_critic(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-"):
         continue
@@ -51,7 +51,11 @@ class Go2WObservationNoiseTests(unittest.TestCase):
           self.assertFalse(critic.enable_corruption)
           self.assertTrue(all(term.noise is None for term in critic.terms.values()))
           self.assertIsNone(actor.terms["command"].noise)
-          self.assertIsNone(actor.terms["actions"].noise)
+          action_noise = actor.terms["actions"].noise
+          self.assertEqual((action_noise.operation, action_noise.n_min, action_noise.n_max),
+                           ("add", -.03, .03))
+          if "phase" in actor.terms:
+            self.assertIsNone(actor.terms["phase"].noise)
           amplitudes = ((.3, .08, .015, 2., .15) if "v2" in task else
                         (.25, .06, .012, 1.8, .12) if "v1" in task else
                         (.2, .05, .01, 1.5, .1))
@@ -65,11 +69,11 @@ class Go2WObservationNoiseTests(unittest.TestCase):
           if "height_scan" in actor.terms:
             noise = actor.terms["height_scan"].noise
             self.assertEqual((noise.n_min, noise.n_max), (-amplitudes[4], amplitudes[4]))
-          self.assertEqual(actor.terms["wheel_vel"].scale, .05)
+          self.assertEqual(actor.terms["wheel_vel"].scale, .1)
           self.assertEqual(critic.terms["wheel_vel"].scale, .1)
           self.assertEqual(critic.terms["foot_height"].scale, 5.)
 
-  def test_native_manager_keeps_commands_actions_and_critic_exact(self):
+  def test_native_manager_keeps_commands_critic_and_raw_buffers_exact(self):
     for play in (False, True):
       with self.subTest(play=play):
         env, manager = make_manager(play=play)
@@ -78,7 +82,7 @@ class Go2WObservationNoiseTests(unittest.TestCase):
         with patch("mjlab.utils.noise.noise_cfg.torch.rand_like",
                    side_effect=lambda value: torch.full_like(value, .75)) as draw:
           observations = manager.compute(update_history=True)
-        self.assertEqual(draw.call_count, 0 if play else 6)
+        self.assertEqual(draw.call_count, 0 if play else 7)
         for group, terms in observations.items():
           for name, value in terms.items():
             term = manager.get_term_cfg(group, name)

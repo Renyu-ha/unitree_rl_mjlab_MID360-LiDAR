@@ -323,3 +323,6 @@ public:
     std::unique_ptr<BmsState_t> bmsstate;
     std::unique_ptr<IMUState_t> secondary_imustate;
 };
+
+// Go2W uses the same simulator entry and SDK channels, with named motor mapping.
+#include "go2w_bridge.h"
