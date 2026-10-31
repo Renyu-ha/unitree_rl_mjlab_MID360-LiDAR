@@ -8,7 +8,8 @@ from unittest.mock import patch
 import torch
 
 from src.tasks.velocity.mdp.sgs import SGSConfig, SuccessGuidedSampler, VelocityTrackingOutcome
-from src.tasks.velocity.mdp.sgs_velocity_command import SGSVelocityCommandCfg, reset_sgs_root
+from src.tasks.velocity.mdp.sgs_velocity_command import SGSVelocityCommandCfg
+from src.tasks.velocity.mdp.velocity_buckets import make_velocity_buckets
 
 
 class SamplerTests(unittest.TestCase):
@@ -58,6 +59,30 @@ class SamplerTests(unittest.TestCase):
       sampler.load_state_dict(state)
     with self.assertRaises(ValueError):
       sampler.update(torch.tensor([3]), torch.tensor([False]))
+
+  def test_group_balancing_and_sparse_history_prior(self):
+    cfg = SGSConfig(history_length=8)
+    s = SuccessGuidedSampler(3, cfg, group_ids=torch.tensor([0, 1, 1]))
+    torch.testing.assert_close(s.base_probs, torch.tensor([.5, .25, .25]))
+    torch.testing.assert_close(s.rates(), torch.full((3,), .66))
+    s.update(torch.tensor([1, 1]), torch.tensor([False, False]))
+    self.assertGreater(float(s.rates()[1]), 0.)
+    self.assertLess(float(s.rates()[2]), .66)  # an unvisited sibling shares evidence
+    self.assertAlmostEqual(float(s.rates()[0]), .66, places=6)
+    self.assertEqual(s.parent.counts.tolist(), [0, 2])
+    self.assertTrue(bool((s.probabilities() >= cfg.uniform_mix * s.base_probs).all()))
+    clone = SuccessGuidedSampler(3, cfg, group_ids=torch.tensor([0, 1, 1]))
+    clone.load_state_dict(s.state_dict())
+    torch.testing.assert_close(s.rates(), clone.rates())
+    torch.testing.assert_close(s.sample(50), clone.sample(50))
+    cfg.adaptive = False
+    torch.testing.assert_close(s.probabilities(), torch.tensor([.5, .25, .25]))
+
+  def test_parent_history_preserves_outcome_order_across_siblings(self):
+    s = SuccessGuidedSampler(3, SGSConfig(history_length=4), group_ids=torch.zeros(3, dtype=torch.long))
+    s.update(torch.tensor([2, 2, 0, 0, 1, 1]), torch.tensor([True, True, False, False, False, False]))
+    self.assertEqual(int(s.parent.counts[0]), 6)
+    self.assertFalse(bool(s.parent.history.any()))
 
 
 class OutcomeTests(unittest.TestCase):
@@ -130,9 +155,10 @@ def make_command(n=5):
   env = SimpleNamespace(num_envs=n, device="cpu", step_dt=.1, max_episode_length_s=1., max_episode_length=10,
     cfg=SimpleNamespace(seed=5), scene=scene, termination_manager=tm,
     episode_length_buf=torch.zeros(n, dtype=torch.long), reset_buf=torch.zeros(n, dtype=torch.bool))
-  cfg = SGSVelocityCommandCfg(entity_name="robot", resampling_time_range=(2., 3.),
-    ranges=SGSVelocityCommandCfg.Ranges(lin_vel_x=(-.3, .5), lin_vel_y=(-.3, .3), ang_vel_z=(-.5, .5)),
-    sgs=SGSConfig(profiles_per_tile=5, settle_s=.2, min_segment_s=.2))
+  cfg = SGSVelocityCommandCfg(entity_name="robot", resampling_time_range=(2., 3.), heading_command=True,
+    ranges=SGSVelocityCommandCfg.Ranges(lin_vel_x=(-.3, .5), lin_vel_y=(-.3, .3), ang_vel_z=(-.5, .5),
+      heading=(-3.14, 3.14)),
+    sgs=SGSConfig(velocity_subdivisions=1, settle_s=.2, min_segment_s=.2))
   command = cfg.build(env)
   env.command_manager = SimpleNamespace(get_term=lambda _: command)
   command.on_reset(torch.arange(n))
@@ -164,10 +190,8 @@ class IntegrationTests(unittest.TestCase):
     torch.testing.assert_close(c.sampler.counts, expected)
     self.assertTrue(bool(c.sampler.history.any()))
     self.assertEqual(c.outcome.steps.tolist(), [10, 0, 10, 0, 10])
-    tile = c.config_ids[[1, 3]] // c.cfg.sgs.profiles_per_tile
+    tile = c.config_ids[[1, 3]] // c.bucket_count
     torch.testing.assert_close(e.scene.env_origins[[1, 3]], e.scene.terrain.terrain_origins[tile // 2, tile % 2])
-    reset_sgs_root(e, torch.tensor([1, 3]))
-    torch.testing.assert_close(c.robot.pose[:, :2], e.scene.env_origins[[1, 3], :2] + c.bank["spawn"][c.config_ids[[1, 3]], :2])
 
   def test_fall_during_settling_is_a_failure(self):
     c, e = make_command(1)
@@ -196,11 +220,17 @@ class IntegrationTests(unittest.TestCase):
     other.load_sgs_state_dict(saved)
     torch.testing.assert_close(c.sampler.sample(100), other.sampler.sample(100))
     self.assertTrue(bool(other._censored.all()))
-    saved["bank"]["commands"][0, 0, 0] = .1
+    for item in (c, other):
+      item.config_ids[:] = 1
+      item.profile_step.zero_()
+      item._resample(torch.arange(item.num_envs))
+    torch.testing.assert_close(c.command, other.command)
+    torch.testing.assert_close(c.time_left, other.time_left)
+    saved["spec"]["buckets"]["lower"][0][0][0] = .1
     with self.assertRaises(ValueError):
       other.load_sgs_state_dict(saved)
 
-  def test_resampling_closes_segment_and_replays_the_fixed_profile(self):
+  def test_resampling_closes_segment_and_draws_fresh_velocities(self):
     c, e = make_command(1)
     c.config_ids[0] = 1
     c.profile_step[0] = 0
@@ -214,8 +244,67 @@ class IntegrationTests(unittest.TestCase):
     self.assertEqual(int(c.outcome.age[0]), 0)
     c.profile_step[0] = 0
     c._resample(torch.tensor([0]))
-    torch.testing.assert_close(c.command, first)
-    torch.testing.assert_close(c.time_left, duration)
+    self.assertFalse(torch.equal(c.command, first))
+    self.assertFalse(torch.equal(c.time_left, duration))
+    self.assertTrue(bool((c.command[:, 0] >= .1).all()))
+    self.assertTrue(bool((c.command[:, 0] <= .22).all()))
+
+  def test_all_intervals_respect_their_bounds_in_both_phases(self):
+    c, _ = make_command(24)
+    c.config_ids[:] = torch.arange(24)
+    for phase in (0, 1):
+      c.profile_step.fill_(phase)
+      c._resample_command(torch.arange(24))
+      self.assertTrue(bool((c.vel_command_w >= c.buckets.lower[:, phase] - 1e-6).all()))
+      self.assertTrue(bool((c.vel_command_w <= c.buckets.upper[:, phase] + 1e-6).all()))
+      self.assertTrue(bool((c.time_left >= 2.).all() & (c.time_left <= 3.).all()))
+      self.assertEqual(c.is_heading_env.tolist(), (c.buckets.modes == 2).tolist())
+      self.assertEqual(c.is_world_env.tolist(), (c.buckets.modes == 1).tolist())
+
+  def test_transition_categories_switch_without_changing_the_sgs_id(self):
+    c, _ = make_command(1)
+    for name in ("stand_to_forward", "forward_to_stand", "forward_backward", "turn_left_right"):
+      bucket = c.buckets.names.index(f"{name}/0")
+      c.config_ids.fill_(bucket)
+      c.profile_step.zero_()
+      c._resample_command(torch.tensor([0]))
+      first = c.command.clone()
+      c._resample_command(torch.tensor([0]))
+      second = c.command.clone()
+      if name == "stand_to_forward":
+        self.assertEqual(float(first.abs().sum()), 0.)
+        self.assertGreater(float(second[0, 0]), 0.)
+      elif name == "forward_to_stand":
+        self.assertGreater(float(first[0, 0]), 0.)
+        self.assertEqual(float(second.abs().sum()), 0.)
+      elif name == "forward_backward":
+        self.assertGreater(float(first[0, 0]), 0.)
+        self.assertLess(float(second[0, 0]), 0.)
+      else:
+        self.assertGreater(float(first[0, 2]), 0.)
+        self.assertLess(float(second[0, 2]), 0.)
+      self.assertEqual(int(c.config_ids[0]), bucket)
+
+  def test_default_subdivisions_cover_continuous_forward_range(self):
+    c, _ = make_command(1)
+    ranges = c.cfg.ranges
+    ranges.lin_vel_x = (-.6, 1.1)
+    b = make_velocity_buckets(ranges)
+    self.assertEqual(len(b.categories), 24)
+    self.assertEqual(b.size, 185)
+    self.assertEqual(90 * b.size, 16650)
+    ids = [i for i, name in enumerate(b.names) if name.startswith("forward_")
+      and not name.startswith(("forward_to_", "forward_backward"))]
+    lo, hi = b.lower[ids, 0, 0], b.upper[ids, 0, 0]
+    order = lo.argsort()
+    self.assertAlmostEqual(float(lo.min()), .1, places=6)
+    self.assertAlmostEqual(float(hi.max()), 1.1, places=6)
+    torch.testing.assert_close(hi[order][:-1], lo[order][1:])
+
+  def test_fixed_profile_checkpoint_is_rejected_with_warm_start_guidance(self):
+    c, _ = make_command(1)
+    with self.assertRaisesRegex(ValueError, "warm-start"):
+      c.load_sgs_state_dict({"spec": {"version": 1}})
 
   def test_manual_joystick_censors_only_the_selected_environment(self):
     c, e = make_command(2)
@@ -240,6 +329,20 @@ class IntegrationTests(unittest.TestCase):
       self.assertTrue(bool(command._censored.all()))
     with patch.object(Go2WOnPolicyRunner, "load", return_value={"sgs_state": {}}):
       runner.load("unused.pt", load_cfg={"actor": True})
+      command.sampler.update(torch.tensor([0]), torch.tensor([True]))
+      command.cfg.warm_start = True
+      env.common_step_counter = 123
+      runner.alg = SimpleNamespace(optimizer=SimpleNamespace(state={0: "old momentum"},
+        param_groups=[{"lr": .09}]), learning_rate=.09)
+      runner.cfg = {"algorithm": {"learning_rate": .001}}
+      with self.assertWarnsRegex(UserWarning, "Warm start"):
+        runner.load("unused.pt")
+      self.assertEqual(int(command.sampler.counts.sum()), 0)
+      self.assertEqual(int(command.sampler.parent.counts.sum()), 0)
+      self.assertEqual(env.common_step_counter, 0)
+      self.assertEqual(runner.current_learning_iteration, 0)
+      self.assertFalse(runner.alg.optimizer.state)
+      self.assertEqual(runner.alg.optimizer.param_groups[0]["lr"], .001)
       command.cfg.evaluation = True
       runner.load("unused.pt")
     with self.assertRaises(ValueError):
@@ -267,6 +370,8 @@ class IntegrationTests(unittest.TestCase):
     self.assertNotEqual(sgs.commands["twist"].sgs.bank_seed, play.commands["twist"].sgs.bank_seed)
     self.assertTrue(play.commands["twist"].evaluation)
     self.assertEqual(play.episode_length_s, 20.)
+    self.assertEqual(sgs.commands["twist"].sgs.velocity_subdivisions, 8)
+    self.assertEqual(asdict(sgs.events["reset_base"]), asdict(base.events["reset_base"]))
     self.assertIs(load_runner_cls("Unitree-Go2W-Perceptive-Rough-v2-SGS"), Go2WSGSRunner)
 
   def test_multi_process_use_fails_explicitly(self):

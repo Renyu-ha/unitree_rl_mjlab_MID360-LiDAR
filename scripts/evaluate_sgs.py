@@ -1,4 +1,4 @@
-"""Evaluate Go2W actors on one fresh, uniform SGS bank with finite episodes."""
+"""Evaluate actors on held-out terrain, randomized spawns and fresh velocity draws."""
 
 import argparse
 from dataclasses import asdict
@@ -49,6 +49,8 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
     policy = runner.get_inference_policy(device)
     command = env.command_manager.get_term("twist")
     records = []
+    # Wait for fixed per-environment quotas, rather than favoring fast failures.
+    remaining = [episodes // num_envs + int(i < episodes % num_envs) for i in range(num_envs)]
     max_steps = env.max_episode_length * ((episodes + num_envs - 1) // num_envs) * 10
     with torch.inference_mode():
       obs = wrapped.get_observations()
@@ -57,13 +59,20 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
         result = command.last_episodes
         if result is not None:
           valid = result["valid"]
+          env_ids = result["env_ids"][valid].cpu().tolist()
           ids = result["config_ids"][valid].cpu().tolist()
           success = result["success"][valid].cpu().tolist()
           failed = result["terminated"][valid].cpu().tolist()
           rms = result["rms"][valid].cpu().tolist()
-          for config_id, passed, fell, error in zip(ids, success, failed, rms):
-            tile = config_id // command.cfg.sgs.profiles_per_tile
-            records.append({"terrain": names[tile % command.cols], "level": tile // command.cols,
+          for env_id, config_id, passed, fell, error in zip(env_ids, ids, success, failed, rms):
+            if remaining[env_id] == 0:
+              continue
+            remaining[env_id] -= 1
+            tile, bucket = divmod(config_id, command.bucket_count)
+            category = int(command.buckets.category_ids[bucket])
+            records.append({"env_id": env_id, "terrain": names[tile % command.cols], "level": tile // command.cols,
+              "config_id": config_id, "velocity_bucket": command.buckets.names[bucket],
+              "command_category": command.buckets.categories[category],
               "success": passed, "fell": fell, "linear_rms": error[0], "yaw_rms": error[1]})
             if len(records) == episodes:
               break
@@ -82,8 +91,14 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
         "yaw_rms_mean": sum(x["yaw_rms"] for x in rows) / len(rows)}
 
     report = {"checkpoint": str(checkpoint), "seed": seed, "sampler": "uniform",
+      "sampling_measure": "uniform terrain/category, uniform speed sub-bin within category",
+      "task_distribution": command.buckets.description(),
       "success_settings": asdict(command.cfg.sgs), "overall": summary(records),
       "by_terrain": {name: summary([r for r in records if r["terrain"] == name]) for name in names},
+      "by_command_category": {name: summary([r for r in records if r["command_category"] == name])
+        for name in command.buckets.categories},
+      "by_velocity_bucket": {name: summary([r for r in records if r["velocity_bucket"] == name])
+        for name in command.buckets.names},
       "records": records}
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)

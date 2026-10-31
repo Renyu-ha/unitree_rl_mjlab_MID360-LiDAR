@@ -1,142 +1,137 @@
-# Go2W 速度跟随 SGS 训练
+# Go2W 速度跟随 SGS：连续速度区间版
 
-新增两个独立任务，原有 v2、Gait、StepUp 等任务不变：
+当前 SGS 调度 **地形块 × 速度任务/子区间**，出生位置和朝向保持原 v2 的每回合随机化。具体速度和持续时间在运行时重新抽取，不再复用 16 组固定序列。
 
 | 任务 | 采样方式 |
 | --- | --- |
-| `Unitree-Go2W-Perceptive-Rough-v2-SGS` | 成功率引导采样，默认混合 10% 均匀探索 |
-| `Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform` | 同一固定场景库均匀采样，用作对照 |
+| `Unitree-Go2W-Perceptive-Rough-v2-SGS` | 成功率引导，默认混合 10% 类别均衡探索 |
+| `Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform` | 相同区间和随机化，按地形/运动大类均衡抽样 |
 
-SGS 根据 [A Balanced Data Diet，arXiv:2610.12465](https://arxiv.org/abs/2610.12465) 的公式独立实现。速度跟随成功标签参考了 [capstan 的公开实现](https://github.com/soujanya957/capstan-drive-leg/blob/1d263fa52b096f58c7b93ca72f855d57334db202/CapstanPedal/fullbuild_v4/rl/mjx_walk.py)，再加入低速、分段和重置处理；没有复制这些项目的源代码，也没有引入它们的依赖。
+核心权重参考 [SGS 论文](https://arxiv.org/abs/2610.12465)。速度标签参考 [capstan 代码](https://github.com/soujanya957/capstan-drive-leg/blob/1d263fa52b096f58c7b93ca72f855d57334db202/CapstanPedal/fullbuild_v4/rl/mjx_walk.py)。区间内在线采样、分层概率收缩和类别均衡探索是本项目的工程扩展，并非原论文固定具体配置的严格复现。
 
 ## 训练与对照
 
-在已安装本项目依赖的环境里，从仓库根目录运行：
-
 ```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --gpu-ids "[0]" --agent.seed=0
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --gpu-ids "[1]" --agent.seed=0
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene.num-envs=4096 --gpu-ids "[1]" --agent.seed=0
 ```
 
-使用相同种子、环境数量、PPO 参数和训练预算运行均匀对照：
+使用相同种子、PPO 参数、区间和训练预算比较。GPU 参数必须采用列表语法 `[1]`，不能写成整数 `1`。未限制 CUDA_VISIBLE_DEVICES 时选择物理 GPU 1，进程内日志显示 cuda:0 属于正常映射。SGS 目前仅支持单训练进程/单 GPU。
 
-```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene.num-envs=4096 --gpu-ids "[0]" --agent.seed=0
-```
+原 v2、Gait、StepUp 等任务保留原机制。SGS 继承 v2 的 PPO、镜像增强、奖励、混合动作、720 维 Actor 历史输入及 MID360 观测。日志位于 `logs/rsl_rl/go2w_perceptive/`。
 
-任务默认继承 v2 的 PPO、镜像增强、奖励、动作、720 维 Actor 历史输入和 MID360 观测。运行名分别为 `v2_sgs`、`v2_uniform_bank`，日志仍在 `logs/rsl_rl/go2w_perceptive/` 下。
+## 任务与速度覆盖
 
-当前 SGS 专用 Runner 支持**单训练进程/单 GPU**。多进程会明确报错，避免只保存 rank 0 的统计却宣称完整恢复。原有任务的多 GPU 路径不变。
+默认 24 类任务：
 
-GPU 编号使用带引号的 Python 列表语法：第二张卡写 `--gpu-ids "[1]"`。入口启用了 mjlab 的集合字面量解析，不能写成 `--gpu-ids 1`。未提前限制 `CUDA_VISIBLE_DEVICES` 时，`[1]` 选择物理 GPU 1；启动器将其映射为进程内的 `cuda:0`，因此日志显示 `cuda:0` 属于正常情况。
+| 类别 | 数量 |
+| --- | ---: |
+| 站立 | 1 |
+| 前进低/中/高速 | 3 |
+| 后退低/高速 | 2 |
+| 左右侧移 × 低/高速 | 4 |
+| 左右原地转向 × 低/高速 | 4 |
+| 前进/后退混合运动 | 2 |
+| 前进/后退世界坐标运动 | 2 |
+| 前进/后退朝向控制 | 2 |
+| 起步、停止、前后切换、左右转向切换 | 4 |
 
-## 固定场景库
+参考速度范围为 X `[-0.6,1.1]` m/s、Y `[-0.6,0.6]` m/s、Yaw `[-0.8,0.8]` rad/s。前进三级按正向可用范围的 0–30%、30–60%、60–100% 分割，默认边界为 0.1、0.4、0.7、1.1 m/s；后退、侧移和转向分别按各方向可用范围等分两级。
 
-每个配置包含：地形块（类型和等级）、出生 XY 偏移及偏航、整回合速度指令序列、每段持续时间和命令模式。训练 v2 默认实际生成 10 行 × 9 类地形，每块 16 个配置，共 **1440 个配置**；运行时读取真实地形网格，不使用 `num_cols=6` 推算列数。
+每个运动大类沿主速度轴再细分 8 个子区间，站立保持一个桶：`1 + 23*8 = 185` 个速度桶。默认实际地图为 10 行 × 9 列，共 **16650 个 SGS 统计项**。关闭 heading_command 会去掉两个朝向控制大类，实际数量随地形网格和类别数计算，不硬编码列数。
 
-每块保证包含站立、前进、侧移、原地转向和倒退，其余配置按原命令模式生成，保留 heading/world/forward 模式。指令每段 3–8 秒，仍使用逐轴 0.1 死区。出生位置位于块中心 ±0.5 m，净空检查继续在最后执行。
+每次重新采样指令，均在该桶范围内重新生成速度及 3–8 秒持续时间；其余非主轴按类别规定范围采样。普通任务在整个回合保持桶编号；切换任务在两组固定范围之间交替，幅值仍重新随机抽取。世界坐标速度会转换到机体坐标；朝向控制 yaw 由实时反馈产生，所以区间描述的是参考指令。成功判定始终使用最终执行的机体坐标指令。逐轴 0.1 死区保留。
 
-SGS 与均匀对照使用相同的固定地形种子、指令库与出生配置。质量、摩擦、推扰等现有随机化继续作为场景内的扰动，因此这里是**固定场景条件上的成功率估计**，不是将全部随机化状态固定下来。
+类别分层替代旧 rel_standing_envs/rel_forward_envs 等指令模式占比；低速前进不会被旧 forward 模式强制抬到 0.3 m/s。
 
-SGS 接管地形分配；原距离升降课程和按步扩展速度范围的课程关闭。场景库从一开始覆盖 v2 最终范围：X `[-0.6, 1.1]` m/s、Y `[-0.6, 0.6]` m/s、Yaw `[-0.8, 0.8]` rad/s，避免同一配置随训练阶段改变含义。奖励权重课程和 MID360 感知课程继续保留。
+出生状态直接保留 v2 的 reset_base：每次在所选块中心附近重新抽取 X/Y ±0.5 m 和 yaw [-3.14,3.14]，净空检查仍在最后执行。出生位置、朝向不进入 SGS 编号。其他动力学随机化、推扰和噪声按原机制执行。
 
-SGS 的均匀对照也采用上述场景库和指令范围；它与原 v2 不是同一个训练分布。比较 SGS 的贡献应优先比较这两个新增任务。
+SGS 接管地形分配，关闭原来的距离升降地形课程和逐步扩大速度范围课程；奖励权重课程及 MID360 感知课程继续运行。
 
-## 成功标签
+可通过 `--env.commands.twist.sgs.velocity-subdivisions` 调整统计分辨率：1 对应默认地图 2160 项，4 对应 8370 项，8 对应 16650 项。所有设置都会在线生成连续速度；增加子区间不扩大速度总范围。更改细分数量需要新实验或权重热启动。
 
-在物理步完成、环境自动重置及命令更新之前，读取该步实际执行的机体坐标系 `twist` 和真实机体速度，独立累计误差。每次**重新采样命令**后的前 0.6 秒不计误差，heading 每步反馈更新不会重启宽限期。
+## 成功定义
 
-对每个至少有 1 秒有效计分时间的指令段，计算：
+物理步完成后、自动重置及命令更新之前，比较真实基座机体速度与该步实际执行指令。每次重新采样指令后的前 0.6 秒留作响应时间；heading 每步反馈不重启宽限期。
 
-```text
-linear_rms = sqrt(mean((vx - cmd_x)^2 + (vy - cmd_y)^2))
-yaw_rms    = sqrt(mean((wz - cmd_yaw)^2))
-cmd_linear_rms = sqrt(mean(cmd_x^2 + cmd_y^2))
-cmd_yaw_rms    = sqrt(mean(cmd_yaw^2))
-```
+每段至少有 1 秒有效计分时间，计算平移误差 `sqrt(mean((vx-cx)^2+(vy-cy)^2))` 和转向误差 `sqrt(mean((wz-cw)^2))`。条件为：
 
-| 指令段 | 通过条件 |
+| 情况 | 误差上限（严格小于） |
 | --- | --- |
-| 非零平移 | `linear_rms < min(0.2, 0.5 * cmd_linear_rms)` |
-| 零平移 | `linear_rms < 0.1` m/s |
-| 非零转向 | `yaw_rms < min(0.35, 0.5 * cmd_yaw_rms)` |
-| 零转向 | `yaw_rms < 0.15` rad/s |
+| 非零平移 | `min(0.2 m/s, 0.5*指令平移RMS)` |
+| 零平移 | `0.1 m/s` |
+| 非零转向 | `min(0.35 rad/s, 0.5*指令转向RMS)` |
+| 零转向 | `0.15 rad/s` |
 
-相对误差门槛用于拒绝低速指令下停着不动。两项条件都要通过；回合中较早失败的段不能被后面成功的段平均掉。结束时不足 1 秒的尾段不参与判定。
+一次成功要求完整跑满 20 秒、没有失败终止、至少一个有效段且所有有效段通过。前面失败的段不能被后面平均掉；不足 1 秒计分的尾段不参与判定。跌倒即使发生在宽限期内也记失败。人工重置、手柄接管、初次随机缩短回合、地图越界及非有限状态排除。
 
-**一次成功**要求完整跑完 20 秒、没有终止失败、至少有一个有效指令段，且所有有效段都通过。翻倒即使发生在宽限期内，也记录一次失败。人工重置、手柄接管、RSL-RL 初次随机缩短的回合、地图越界和非有限状态不进入成功历史。不会通过新增奖励或成功终止改变 PPO 目标。
+这些门槛是尚未实机标定的初始值。成功标签只用于 SGS 统计，不增加奖励或成功终止。
 
-这些阈值是可配置的初始设置，不是已在 Go2W 真机上标定的标准。先观察真实策略的误差分布及场景覆盖率，再决定是否调整；比较不同采样器时保持判据一致。
+## 成功统计与抽样
 
-## SGS 参数与日志
-
-默认每个配置保存最近 H=100 次真实 Boolean 结果。未访问配置的估计初始化为目标成功率 0.66；首次观察后只计算已有结果，不把未观察回合算失败。
+细分配置及父组（同一地形块/运动大类）各保存最近 H=32 个 Boolean 结果。默认 a=group_prior_strength=4：
 
 ```text
-w_i = (p_i + eps)^(k*t) * (1-p_i + eps)^(k*(1-t))
-logit_i = log(max(w_i, eps) + eps)
-q_sgs = softmax(logit / max(T, 1))
-q = 0.9 * q_sgs + 0.1 / N
-t=0.66, k=5, T=2, eps=1e-8
+p_group = (group_successes + a*0.66)/(group_samples + a)
+p_i = (successes_i + a*p_group)/(samples_i + a)
 ```
 
-10% 均匀混合和未访问配置初始化属于本项目的工程选择。设置以下选项可以移除均匀混合：
+样本数和成功数只取各自近期窗口。完全未访问组的概率为 0.66；同组成绩能辅助未访问子区间。设置 a=0 可关闭收缩，恢复各项独立的经验成功率。滚动结果仍只存真实成功/失败，不把未访问当失败。
 
-```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --env.commands.twist.sgs.uniform-mix=0.0
-```
-
-其他命令行字段见 `scripts/train.py <任务名> --help`：
+对照基础分布先均匀选地形块和运动大类，再均匀选该类子区间，站立不会因只有一个桶而被稀释。它不是三维速度空间的均匀密度，也不是所有细分编号等概率。
 
 ```text
---env.commands.twist.sgs.history-length
---env.commands.twist.sgs.target-success
---env.commands.twist.sgs.concentration
---env.commands.twist.sgs.temperature
---env.commands.twist.sgs.profiles-per-tile
---env.commands.twist.sgs.bank-seed
---env.commands.twist.sgs.settle-s
---env.commands.twist.sgs.linear-rms
---env.commands.twist.sgs.yaw-rms
---env.commands.twist.sgs.relative-error
+base_i = 1/(地形块数 * 大类数 * 该类子区间数)
+w_i = (p_i+eps)^(k*t) * (1-p_i+eps)^(k*(1-t))
+logit_i = log(max(w_i,eps)+eps)
+q_sgs = softmax(logit_i/max(T,1) + log(base_i))
+q_i = 0.9*q_sgs + 0.1*base_i
+默认 t=0.66, k=5, T=2, eps=1e-8
 ```
 
-`bank-seed` 控制出生/指令库；地形生成种子是独立的 `env.scene.terrain.terrain_generator.seed` 配置，默认训练为 20261030。
+常用参数前缀 `--env.commands.twist.sgs.`：`velocity-subdivisions`、`history-length`、`group-prior-strength`、`target-success`、`concentration`、`temperature`、`uniform-mix`、`bank-seed`、`settle-s`、`min-segment-s`、`linear-rms`、`yaw-rms`、`relative-error`、`standing-linear-rms`、`standing-yaw-rms`。旧 profiles-per-tile 参数已移除。
 
-日志前缀为 `Curriculum/sgs_sampling/`：`success_rate` 是本次有效重置的成功比例；`valid_episodes`、`recorded_total`、`skipped_total` 是有效/排除计数；`linear_rms`、`yaw_rms` 是物理误差；`bank_coverage` 是访问覆盖率；`bank_success` 是已访问配置的近期均值。它们用于检查采样运行状态，**不能代替独立评估**。
+bank-seed + agent.seed 初始化指令随机流；任务选择使用单独随机流，出生随机化由环境随机流负责。地形生成种子为 env.scene.terrain.terrain_generator.seed，默认训练为 20261030。
 
-## 保存、续训与回放
+日志前缀 `Curriculum/sgs_sampling/`：success_rate 是当前有效重置成功率，bank_success 是已访问细分配置的原始近期成功率均值，bank_coverage/group_coverage 是两层访问覆盖率，min_visits 是最低访问次数，configurations 是统计项总数；另有有效/排除计数及速度 RMS。采样分布一直变化，训练成功率不能替代独立评估。
 
-SGS Runner 在普通模型 checkpoint 的 `infos.sgs_state` 中保存场景库、历史环形缓冲区、计数和采样随机数状态；照常导出 `policy.onnx` 及部署 YAML。每个同时完成的配置都会写入自己的历史槽位，超过 H 个同时结果时保留最新 H 个。
+## 保存、续训与旧模型
+
+checkpoint 的 infos.sgs_state 保存区间定义、两层历史及计数、任务选择和指令生成两条随机流，照常导出 ONNX 与部署 YAML。同一编号或父组同时完成的结果逐一写入，超过窗口大小时保留最新结果。
+
+正常续训保持相同任务定义与成功判据：
 
 ```bash
-python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --agent.resume=True --agent.load-run=原SGS运行目录名 --agent.load-checkpoint=model_1000.pt
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --gpu-ids "[1]" --agent.resume=True --agent.load-run=运行目录名 --agent.load-checkpoint=model_1000.pt
 ```
 
-续训必须保持场景库、地形和成功判据设置一致；不一致会报错。旧 v2 checkpoint 没有 SGS 历史时会明确提示从未访问库开始。恢复的是模型与采样状态，mjlab 不恢复物理轨迹；恢复后的在途回合被排除，下一次环境重置后再开始记分。
+旧固定序列/固定出生 checkpoint 是版本 1，当前是版本 2，成功历史不兼容。可在模型结构匹配时仅加载 Actor/Critic 权重（含观测归一化），清空优化器、迭代数、课程计数和 SGS 历史：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --gpu-ids "[1]" --agent.resume=True --agent.load-run=旧运行目录名 --agent.load-checkpoint=model_1000.pt --env.commands.twist.warm-start=True
+```
+
+热启动后的常规续训应移除 warm-start=True。mjlab 不保存物理轨迹或完整环境随机状态，恢复后在途回合会被排除，下次实际重置再记分，不能宣称精确重放整场仿真。
+
+## 回放与独立评估
 
 ```bash
 python scripts/play.py Unitree-Go2W-Perceptive-Rough-v2-SGS --checkpoint-file=完整模型路径
+python scripts/evaluate_sgs.py --checkpoint 路径/model_1000.pt --num-envs 128 --episodes 512 --seed 20261031 --device cuda:1 --output outputs/sgs_eval.json
 ```
 
-play 配置使用另一随机种子生成的新场景库、均匀采样和有限 20 秒回合，不恢复训练采样历史，也禁止保存训练 checkpoint。修改 play 任务的 CLI 参数属于不同评估条件，应记录下来。
+评估使用新地形种子、新指令随机流和随机出生，按类别均衡采样；采用最终 MID360 配置，关闭 play 原本关闭的推扰。只加载模型，不恢复训练采样历史，play 禁止覆盖训练 checkpoint。评估脚本的 --device 是进程内 PyTorch 设备，不经过训练入口的 GPU 重映射。
 
-## 独立评估
+报告包含整体、地形、大类、子区间的成功率、失败终止率、RMS 和逐回合记录，保存区间定义与抽样测度。按环境分配固定有效回合配额，等待全部完成，避免只收集最快结束的失败回合。未覆盖项显示 episodes=0 和空指标。512 回合不足以覆盖全部细分任务；完整覆盖需增加预算。默认成功判据固定，训练中自定义判据不自动进入评估。
 
-对两个模型使用相同种子、回合数和环境数量：
-
-```bash
-python scripts/evaluate_sgs.py --checkpoint 路径/model_1000.pt --num-envs 128 --episodes 512 --seed 20261031 --device cuda:0 --output outputs/sgs_eval.json
-```
-
-输出整体及各地形成功率、翻倒率、RMS 误差和逐回合结果。评估使用新地形/出生/指令库，均匀抽样，采用最终 MID360 感知配置，关闭 play 本来就关闭的随机推扰；两个采样器采用同样条件。默认使用上表的成功判据，报告会保存它们。训练中若改过成功阈值，评估仍按这套固定默认标准比较。
-
-至少比较 3 个训练种子；不要仅比较训练日志中的采样成功率。当前代码完成了 CPU 流程验证，尚未完成 GPU 性能测试、收敛实验或真机验证。
+至少比较 3 个训练种子。当前仅能验证 CPU 流程，GPU 性能、长期收敛及真机效果需要后续实验。
 
 ## 代码入口
 
-- `src/tasks/velocity/mdp/sgs.py`：采样器和指令段成功统计。
-- `src/tasks/velocity/mdp/sgs_velocity_command.py`：固定场景库、重置归因和持久化。
-- `src/tasks/velocity/config/go2w/sgs_env_cfg.py`：独立实验配置。
-- `src/tasks/velocity/rl/sgs_runner.py`：checkpoint 保存与恢复。
-- `scripts/evaluate_sgs.py`：独立均匀评估。
-- `tests/test_sgs.py`：重复索引、低速停滞、宽限、分段、排除规则和状态恢复回归。
+- src/tasks/velocity/mdp/sgs.py：采样器、分层概率估计及成功判定。
+- src/tasks/velocity/mdp/velocity_buckets.py：类别与速度子区间。
+- src/tasks/velocity/mdp/sgs_velocity_command.py：在线指令、重置归因及持久化。
+- src/tasks/velocity/config/go2w/sgs_env_cfg.py：独立任务配置。
+- src/tasks/velocity/rl/sgs_runner.py：续训和权重热启动。
+- scripts/evaluate_sgs.py：独立评估。
+- tests/test_sgs.py：统计、区间覆盖、切换、排除规则和恢复检查。

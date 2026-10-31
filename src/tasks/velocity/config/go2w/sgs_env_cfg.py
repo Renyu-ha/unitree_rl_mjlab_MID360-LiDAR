@@ -9,7 +9,7 @@ from src.tasks.velocity.config.go2w.env_cfgs import _make_go2w_env_cfg, _terrain
 from src.tasks.velocity.config.go2w.rl_cfg import unitree_go2w_ppo_runner_cfg
 from src.tasks.velocity.mdp.sgs import SGSConfig
 from src.tasks.velocity.mdp.sgs_velocity_command import (
-  SGSVelocityCommandCfg, reset_sgs_root, sgs_reset_curriculum, sgs_tracking_step,
+  SGSVelocityCommandCfg, sgs_reset_curriculum, sgs_tracking_step,
 )
 
 
@@ -17,8 +17,8 @@ def unitree_go2w_sgs_env_cfg(play=False, *, adaptive=True):
   cfg = _make_go2w_env_cfg(play, stage="v2")
   old = cfg.commands["twist"]
   settings = SGSConfig(adaptive=adaptive and not play, bank_seed=20261031 if play else 20261030)
-  # The fixed bank covers the final V2 command range from the start. Removing
-  # the step-based command schedule keeps every configuration's meaning fixed.
+  # Velocity intervals cover the final V2 command range from the start.
+  # Their definitions stay fixed while concrete commands are sampled online.
   cfg.commands["twist"] = SGSVelocityCommandCfg(
     entity_name=old.entity_name, resampling_time_range=old.resampling_time_range,
     debug_vis=old.debug_vis, heading_command=old.heading_command,
@@ -37,7 +37,7 @@ def unitree_go2w_sgs_env_cfg(play=False, *, adaptive=True):
   cfg.curriculum.pop("command_vel", None)
   cfg.curriculum["sgs_sampling"] = CurriculumTermCfg(func=sgs_reset_curriculum)
   cfg.events.pop("randomize_terrain", None)
-  cfg.events["reset_base"] = EventTermCfg(func=reset_sgs_root, mode="reset")
+  # Keep V2's reset_base: fresh XY/yaw randomization, independent of the SGS ID.
   cfg.events["sgs_tracking"] = EventTermCfg(func=sgs_tracking_step, mode="step")
   return cfg
 

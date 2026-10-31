@@ -31,11 +31,15 @@ class TrainCliTests(unittest.TestCase):
       "--env.scene.num-envs=4096", "--gpu-ids", "[1]",
       "--env.commands.twist.ranges.lin-vel-x", "(-0.4, 0.9)",
       "--env.commands.twist.viz.scale", "0.75",
+      "--env.commands.twist.sgs.velocity-subdivisions", "4",
+      "--env.commands.twist.warm-start=True",
     )
     self.assertEqual(cfg.gpu_ids, [1])
     self.assertEqual(cfg.env.scene.num_envs, 4096)
     self.assertEqual(cfg.env.commands["twist"].ranges.lin_vel_x, (-0.4, 0.9))
     self.assertEqual(cfg.env.commands["twist"].viz.scale, 0.75)
+    self.assertEqual(cfg.env.commands["twist"].sgs.velocity_subdivisions, 4)
+    self.assertTrue(cfg.env.commands["twist"].warm_start)
 
   def test_non_sgs_multi_gpu_list(self):
     cfg = self.parse("Unitree-Go2W-Perceptive-Rough-v2", "--gpu-ids", "[0,1]")
