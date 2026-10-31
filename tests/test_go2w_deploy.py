@@ -59,14 +59,18 @@ class Go2WDeployTests(unittest.TestCase):
     self.assertEqual(list(cfg["observations"]), [OBSERVATIONS[x][0] for x in self.env.observation_manager.active_terms["actor"]])
     for term in cfg["observations"].values():
       self.assertEqual(term["history_length"], 3)
-    np.testing.assert_allclose(cfg["observations"]["wheel_vel"]["scale"], [0.1])
+    wheel_scale = self.env.observation_manager.get_term_cfg("actor", "wheel_vel").scale
+    np.testing.assert_allclose(cfg["observations"]["wheel_vel"]["scale"], np.asarray(wheel_scale).reshape(-1))
     self.assertEqual(cfg["observations"]["joint_pos_rel"]["params"]["asset_cfg"]["joint_ids"], list(range(12)))
     self.assertEqual(cfg["stiffness"][12:], [0]*4)
     self.assertEqual(cfg["damping"][12:], [2]*4)
     self.assertEqual(cfg["actions"]["JointPositionAction"]["scale"], [0.5]*12)
     self.assertEqual(cfg["actions"]["JointVelocityAction"]["scale"], [20]*4)
     self.assertEqual(cfg["height_scan"]["x_offset_m"], 0.35)
-    self.assertEqual(cfg["height_scan"]["memory_max_age_s"], 0.8)
+    self.assertEqual(cfg["height_scan"]["memory_max_age_s"], 0.0)
+    self.assertTrue(cfg["height_scan"]["mask_visible"])
+    self.assertEqual(len(cfg["height_scan"]["visible_mask"]), 187)
+    self.assertTrue(any(value == 0 for value in cfg["height_scan"]["visible_mask"]))
     self.assertEqual(sorted(cfg["joint_ids_map"]), list(range(16)))
 
   def test_rejects_wrong_tensor_shape_or_history_layout(self):

@@ -27,7 +27,9 @@ from src.assets.robots.unitree_go2w.go2w_constants import (
   GO2W_XML, GO2W_CYLINDER_XML, GO2W_MESH_XML, GO2W_COMMON_XML,
   LEG_JOINTS, WHEEL_JOINTS, WHEEL_RADIUS, get_go2w_robot_cfg, get_spec,
 )
-from src.tasks.velocity.mdp.observations import bridged_mid360_height_scan_memory
+from src.tasks.velocity.mdp.observations import (
+  bridged_mid360_height_scan, bridged_mid360_height_scan_memory,
+)
 from src.tasks.velocity.mdp.rewards.wheel import wheel_spin_contact, wheel_stand_still
 from src.tasks.velocity.config.go2w import env_cfgs as go2w_env_cfgs
 
@@ -446,12 +448,21 @@ class Go2WTests(unittest.TestCase):
     slide.resolve({"robot": self.robot})
     self.assertEqual(slide.body_names, bodies)
 
-  def test_sparse_play_and_memory_are_independent(self):
+  def test_sparse_play_without_map_memory_keeps_observation_history(self):
     task = "Unitree-Go2W-Perceptive-Rough-v2"
     train, play = load_env_cfg(task), load_env_cfg(task, play=True)
     a = train.observations["actor"].terms["height_scan"]
     b = play.observations["actor"].terms["height_scan"]
-    self.assertIsNot(a.func, b.func)
+    for name in list_tasks():
+      if not name.startswith("Unitree-Go2W-Perceptive-Rough-v2"):
+        continue
+      for is_play in (False, True):
+        cfg = load_env_cfg(name, play=is_play)
+        term = cfg.observations["actor"].terms["height_scan"]
+        self.assertIs(term.func, bridged_mid360_height_scan)
+        self.assertNotIn("memory_max_age_s", term.params)
+        self.assertNotIn("enable_memory_shift", term.params)
+        self.assertEqual(cfg.observations["actor"].history_length, 3)
     self.assertEqual(a.params["frame_dropout_prob"], 0.02)
     self.assertEqual(b.params["fixed_curriculum_step"], 6000 * 24)
     self.assertEqual(b.params["frame_dropout_prob"], 0.0)
@@ -461,6 +472,15 @@ class Go2WTests(unittest.TestCase):
     for sensor in train.scene.sensors:
       if sensor.name.startswith("terrain_scan"):
         self.assertEqual(sensor.include_geom_groups, (0, 1))
+
+    # After a valid scan, a dropped frame must contain misses, not cached cells.
+    params = {**b.params, "keep_prob_min": 1.0, "keep_prob_max": 1.0}
+    env = SimpleNamespace(num_envs=1)
+    with patch("src.tasks.velocity.mdp.observations.envs_mdp.height_scan", return_value=torch.full((1, 187), 0.4)):
+      first = b.func(env, **params)
+      self.assertTrue(torch.any(first == 0.4))
+      params["keep_prob_min"] = params["keep_prob_max"] = 0.0
+      torch.testing.assert_close(b.func(env, **params), torch.full_like(first, 5.0))
 
   def test_step14_is_fixed_ascent(self):
     cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2-Step14-Up", play=True)
@@ -543,6 +563,10 @@ class Go2WTests(unittest.TestCase):
               b.pop("func")
               a["params"].pop("asset_cfg", None)
               b["params"].pop("asset_cfg", None)
+              if group == "actor" and term == "height_scan" and "v2" in go2w_task:
+                # G1 retains map memory; Go2W uses only three observation frames.
+                b["params"].pop("memory_max_age_s")
+                b["params"].pop("enable_memory_shift")
               if group == "critic":
                 self.assertIsNone(a["noise"])
                 b["noise"] = None

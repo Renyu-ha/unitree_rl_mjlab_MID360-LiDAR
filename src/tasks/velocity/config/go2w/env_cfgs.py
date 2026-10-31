@@ -703,7 +703,8 @@ def _configure_perception(cfg: ManagerBasedRlEnvCfg, *, play: bool, version: int
   scan.delay_update_period = 2
   if version == 1:
     return
-  scan.func = mdp.bridged_mid360_height_scan_memory()
+  # Keep three observation frames without fusing stale cells across robot poses.
+  scan.func = mdp.bridged_mid360_height_scan
   scan.params = {
     "sensor_name": "terrain_scan", "mid360_sensor_name": "terrain_scan_mid360", **SCAN,
     "visible_x_min_m": 0.25, "visible_x_max_m": 1.15, "visible_y_abs_m": 0.50,
@@ -712,7 +713,7 @@ def _configure_perception(cfg: ManagerBasedRlEnvCfg, *, play: bool, version: int
     "switch_start_step": 500 * 24, "switch_end_step": 2500 * 24,
     "sparse_start_step": 2500 * 24, "sparse_end_step": 6000 * 24,
     "fixed_curriculum_step": 6000 * 24 if play else None,
-    "memory_max_age_s": 0.8, "enable_memory_shift": True, "miss_value": 5.0,
+    "miss_value": 5.0,
   }
   scan.noise = Unoise(n_min=-0.15, n_max=0.15)
   scan.delay_max_lag = 0 if play else 2
