@@ -14,7 +14,7 @@ import torch
 class SGSConfig:
   adaptive: bool = True
   bank_seed: int = 20261030
-  velocity_subdivisions: int = 8
+  velocity_subdivisions: int = 2
   history_length: int = 32
   group_prior_strength: float = 4.0
   target_success: float = 0.66

@@ -28,7 +28,7 @@ class VelocityBuckets:
       "modes": self.modes.cpu().tolist(), "category_ids": self.category_ids.cpu().tolist()}
 
 
-def make_velocity_buckets(ranges, subdivisions=8, *, heading_command=True, device="cpu"):
+def make_velocity_buckets(ranges, subdivisions=2, *, heading_command=True, device="cpu"):
   if subdivisions < 1:
     raise ValueError("Velocity subdivisions must be positive")
   bounds = (ranges.lin_vel_x, ranges.lin_vel_y, ranges.ang_vel_z)

@@ -291,8 +291,8 @@ class IntegrationTests(unittest.TestCase):
     ranges.lin_vel_x = (-.6, 1.1)
     b = make_velocity_buckets(ranges)
     self.assertEqual(len(b.categories), 24)
-    self.assertEqual(b.size, 185)
-    self.assertEqual(90 * b.size, 16650)
+    self.assertEqual(b.size, 47)
+    self.assertEqual(90 * b.size, 4230)
     ids = [i for i, name in enumerate(b.names) if name.startswith("forward_")
       and not name.startswith(("forward_to_", "forward_backward"))]
     lo, hi = b.lower[ids, 0, 0], b.upper[ids, 0, 0]
@@ -370,7 +370,7 @@ class IntegrationTests(unittest.TestCase):
     self.assertNotEqual(sgs.commands["twist"].sgs.bank_seed, play.commands["twist"].sgs.bank_seed)
     self.assertTrue(play.commands["twist"].evaluation)
     self.assertEqual(play.episode_length_s, 20.)
-    self.assertEqual(sgs.commands["twist"].sgs.velocity_subdivisions, 8)
+    self.assertEqual(sgs.commands["twist"].sgs.velocity_subdivisions, 2)
     self.assertEqual(asdict(sgs.events["reset_base"]), asdict(base.events["reset_base"]))
     self.assertIs(load_runner_cls("Unitree-Go2W-Perceptive-Rough-v2-SGS"), Go2WSGSRunner)
 
