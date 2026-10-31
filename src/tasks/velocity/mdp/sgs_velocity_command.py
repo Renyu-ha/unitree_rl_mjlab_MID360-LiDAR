@@ -126,9 +126,20 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
       "command_rms": torch.sqrt(self.outcome.total_command[ids] /
         self.outcome.total_samples[ids].clamp(min=1)[:, None])}
     observed = self.sampler.counts > 0
-    raw_rates = self.sampler.history.sum(1).float() / self.sampler.counts.clamp(max=self.cfg.sgs.history_length).clamp(min=1)
+    recent_successes = self.sampler.history.sum(1)
+    raw_rates = recent_successes.float() / self.sampler.counts.clamp(max=self.cfg.sgs.history_length).clamp(min=1)
+    valid_segments = torch.where(valid, self.outcome.segments[ids], 0).sum()
+    linear_pass, yaw_pass = self.outcome.episode_passes(ids)
     stats = {"success_rate": (success & valid).sum().float() / denom,
       "valid_episodes": valid.sum(), "recorded_total": self.recorded, "skipped_total": self.skipped,
+      "segment_success_rate": torch.where(valid, self.outcome.passed_segments[ids], 0).sum().float()
+        / valid_segments.clamp(min=1),
+      "linear_failed_rate": (valid & ~linear_pass).sum().float() / denom,
+      "yaw_failed_rate": (valid & ~yaw_pass).sum().float() / denom,
+      "terminated_rate": (valid & terminated).sum().float() / denom,
+      "full_timeout_rate": (valid & ~terminated & timed_out & full).sum().float() / denom,
+      "no_valid_segment_rate": (valid & (self.outcome.segments[ids] == 0)).sum().float() / denom,
+      "recent_successes": recent_successes.sum(),
       "linear_rms": torch.where(valid, rms[:, 0], 0.0).sum() / denom,
       "yaw_rms": torch.where(valid, rms[:, 1], 0.0).sum() / denom,
       "bank_coverage": observed.float().mean(),
@@ -148,7 +159,8 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
 
   def checkpoint_spec(self):
     events = getattr(self._env.cfg, "events", {})
-    return {"version": 2, "distribution": "velocity_intervals", "shape": (self.rows, self.cols),
+    return {"version": 3, "success_aggregation": "episode_rms", "distribution": "velocity_intervals",
+      "shape": (self.rows, self.cols),
       "ranges": asdict(self.cfg.ranges), "buckets": self.buckets.description(),
       "interval": self.cfg.resampling_time_range, "episode_s": self._env.max_episode_length_s,
       "terrain": _signature(self._env.scene.terrain.cfg.terrain_generator),
@@ -161,13 +173,23 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
 
   def load_sgs_state_dict(self, state):
     if state.get("spec") != self.checkpoint_spec():
-      raise ValueError("SGS checkpoint task distribution differs (old fixed profiles are incompatible). "
-        "Start a new run or use --env.commands.twist.warm-start=True to load weights with fresh statistics.")
+      raise ValueError("SGS checkpoint task distribution or success criterion differs. "
+        "Use --env.commands.twist.reset-sgs-history=True to resume with fresh SGS statistics, "
+        "or --env.commands.twist.warm-start=True to also restart the optimizer and curricula.")
     self.sampler.load_state_dict(state["sampler"])
     self.command_generator.set_state(state["command_rng"].cpu())
     self.recorded, self.skipped = state["recorded"], state["skipped"]
     # Simulator trajectories are not checkpointed by mjlab. Censor in-flight
     # episodes and assign fresh configurations at the next real env reset.
+    self._censored.fill_(True)
+
+  def reset_sgs_history(self):
+    """Discard labels under an old criterion while keeping training progress."""
+    for sampler in (self.sampler, self.sampler.parent):
+      sampler.history.zero_()
+      sampler.counts.zero_()
+    self.recorded = self.skipped = 0
+    self.last_episodes = None
     self._censored.fill_(True)
 
 
@@ -176,6 +198,7 @@ class SGSVelocityCommandCfg(DeadzoneVelocityCommandCfg):
   sgs: SGSConfig = field(default_factory=SGSConfig)
   evaluation: bool = False
   warm_start: bool = False
+  reset_sgs_history: bool = False
 
   def build(self, env):
     return SGSVelocityCommand(self, env)

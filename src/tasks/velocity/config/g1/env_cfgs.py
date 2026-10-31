@@ -769,13 +769,13 @@ def unitree_g1_perceptive_rough_v2_stepup_finetune_env_cfg(
       "asset_cfg": deepcopy(feet_asset_cfg),
     },
   )
-  cfg.rewards["forward_velocity_floor"] = RewardTermCfg(
-    func=mdp.forward_velocity_floor,
-    weight=-1.2,
+  cfg.rewards["dont_wait"] = RewardTermCfg(
+    func=mdp.dont_wait,
+    weight=-0.1,
     params={
-      "min_velocity": 0.22,
       "command_name": "twist",
-      "command_threshold": 0.1,
+      "command_threshold": 0.2,
+      "slow_velocity_threshold": 0.15,
     },
   )
   cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(

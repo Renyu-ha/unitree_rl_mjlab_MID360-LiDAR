@@ -3,6 +3,7 @@
 The original Go2W builder, task factories and PPO settings remain the baseline.
 Only this variant removes the custom air-time/contact-bonus rewards. Restored
 reward weights, height targets and curricula start from this repository's G1 V2.
+The command-directed dont_wait reward is shared with the other locomotion tasks.
 """
 
 from mjlab.envs import ManagerBasedRlEnvCfg

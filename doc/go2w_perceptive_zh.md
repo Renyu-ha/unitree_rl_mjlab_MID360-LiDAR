@@ -107,6 +107,8 @@ Go2W 的 Actor/Critic 观测项、传感器、地形项、奖励选择、资产�
 
 全部 Go2W 阶段的新训练初始 action std 为 `1.0`；恢复 checkpoint 时会加载其中已训练的分布参数。当前用户配置的角速度跟踪 `std=0.5`、`pose.weight=0.75`、`body_orientation_l2.weight=-0.7`。角速度跟踪权重为Flat/Rough 1.0、感知任务0.75、StepUp 1.15。V2及其派生任务的训练启用pose权重课程：初始0.75，超过8000×24控制步后0.6，超过14000×24后0.5；play关闭课程，保留配置权重0.75。`angular_momentum` 继续停用，`root_angmom` 保留。普通步态、足抬高和普通足滑移奖励不用于滚动；其余奖励按当前Go2W配置独立调参。
 
+**全向防停滞（2026-10-31）：** 所有 Go2W 阶段（Flat、Rough、v1、v2 及其 StepUp、Step14、Gait、SGS 派生任务），以及原先使用固定速度下限的 G1 StepUp 配置，统一用 `dont_wait` 替换 `forward_velocity_floor`，权重为 `-0.1`。沿用本地 robot_lab 的分级防停滞思路，将实际机体系 XY 速度投影到平移指令方向，支持前进、倒退、横移和斜向运动。仅当 `||cmd_xy|| > 0.2 m/s` 时启用；投影速度 `>=0.15`、`[0,0.15)`、`[-0.15,0)`、`<-0.15 m/s` 的原始代价分别为 0、1、2、3，再乘负权重和控制步长。低速平移指令与纯转向指令不启用该项，不累计等待时长，也不再要求低速指令达到固定 `0.22 m/s`。基础速度跟踪奖励继续保留。`-0.1` 为参考初值，长期效果需训练对照验证。
+
 接触打滑参考本地 `robot_lab`（检查时 HEAD 为 `1a8193f`）中 `source/loco_lab/loco_lab/tasks/physx/mdp/rewards/rewards.py::wheel_spin_contact` 的空转公式；该文件的版权与 Apache-2.0 标识保留在迁移文件头部。按本任务需求，接触门控由参考实现的纯法向力改为共享传感器的总接触力，公式为：
 
 ```text
@@ -319,7 +321,7 @@ Go2W仅在Actor的模拟传感器观测声明噪声。指令和上一帧原始ac
 
 新任务为 `Unitree-Go2W-Perceptive-Rough-v2-Gait`，环境差异和PPO运行名称集中在 `src/tasks/velocity/config/go2w/gait_env_cfg.py`。它调用Go2W私有V2构建器生成新配置，不改动原来的 `env_cfgs.py`、`rl_cfg.py` 或六个已注册任务的参数。地形、MID360感知、动作、已有同名奖励及PPO参数沿用当前Go2W V2；仅运行名称改为 `v2_gait`。当前基线用户设置的Actor action噪声±0.03、轮速缩放0.1和slide权重−0.75也一并继承。
 
-该任务包含G1 V2的全部奖励类型，唯一排除 `foot_slip`（普通足端平面打滑代价）。Go2W已有的关节代价、轮侧滑、轮空转和轮停车项继续保留。新增的四项如下，初值和高度目标沿用G1 V2；并未把已有Go2W同名项的权重全部改成G1权重：
+该任务包含G1 V2的奖励类型，排除 `foot_slip`（普通足端平面打滑代价）；当前共用Go2W v2的全向 `dont_wait` 替换固定前向速度下限 `forward_velocity_floor`。Go2W已有的关节代价、轮侧滑、轮空转和轮停车项继续保留。新增的四项如下，初值和高度目标沿用G1 V2；并未把已有Go2W同名项的权重全部改成G1权重：
 
 | 恢复项 | 初始权重 | 参数 |
 | --- | ---: | --- |

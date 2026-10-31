@@ -22,7 +22,7 @@ REMOVED = {"wheel_air_time_timeout", "wheel_air_time_memory", "wheel_contact_bon
 
 
 class Go2WGaitTests(unittest.TestCase):
-  def test_g1_v2_reward_types_are_all_present_except_foot_slip(self):
+  def test_g1_v2_rewards_except_foot_slip_are_present(self):
     for play in (False, True):
       with self.subTest(play=play):
         cfg, g1, baseline = (load_env_cfg(name, play=play) for name in
@@ -30,6 +30,8 @@ class Go2WGaitTests(unittest.TestCase):
         self.assertEqual(set(cfg.rewards), (set(baseline.rewards) - REMOVED) | RESTORED)
         self.assertTrue((set(g1.rewards) - {"foot_slip"}) <= set(cfg.rewards))
         self.assertNotIn("foot_slip", cfg.rewards)
+        self.assertNotIn("forward_velocity_floor", cfg.rewards)
+        self.assertIs(cfg.rewards["dont_wait"].func, mdp.dont_wait)
         for name in g1.rewards.keys() & cfg.rewards.keys():
           self.assertIs(cfg.rewards[name].func, g1.rewards[name].func, name)
         for name in RESTORED:

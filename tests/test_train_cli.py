@@ -45,6 +45,14 @@ class TrainCliTests(unittest.TestCase):
     cfg = self.parse("Unitree-Go2W-Perceptive-Rough-v2", "--gpu-ids", "[0,1]")
     self.assertEqual(cfg.gpu_ids, [0, 1])
 
+  def test_resume_can_reset_only_the_sgs_history(self):
+    cfg = self.parse("Unitree-Go2W-Perceptive-Rough-v2-SGS", "--gpu-ids", "[1]",
+      "--agent.resume=True", "--agent.load-checkpoint=model_8000.pt",
+      "--env.commands.twist.reset-sgs-history=True")
+    self.assertTrue(cfg.agent.resume)
+    self.assertTrue(cfg.env.commands["twist"].reset_sgs_history)
+    self.assertFalse(cfg.env.commands["twist"].warm_start)
+
   def test_uniform_control_cpu(self):
     cfg = self.parse("Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform", "--gpu-ids=None")
     self.assertIsNone(cfg.gpu_ids)

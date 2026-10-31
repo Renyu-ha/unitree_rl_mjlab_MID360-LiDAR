@@ -110,7 +110,7 @@ class OutcomeTests(unittest.TestCase):
     t.finish_segments(torch.tensor([0]))
     self.assertTrue(bool(t.success(torch.tensor([0]))[0]))
 
-  def test_failed_segment_cannot_be_hidden_by_later_success(self):
+  def test_episode_rms_pools_samples_instead_of_requiring_every_segment_to_pass(self):
     t = self.make_tracker()
     cmd = torch.tensor([[.3, 0., 0.]])
     for _ in range(6):
@@ -119,7 +119,73 @@ class OutcomeTests(unittest.TestCase):
     for _ in range(15):
       t.observe(cmd, cmd, torch.zeros(1, 3))
     t.finish_segments(torch.tensor([0]))
+    self.assertTrue(bool(t.success(torch.tensor([0]))[0]))
+    self.assertFalse(bool(t.passed[0]))  # retained strict segment diagnostic
+    self.assertAlmostEqual(float(torch.sqrt(t.total_error[0, 0] / t.total_samples[0])),
+      .3 * (4 / 17)**.5, places=6)
+    self.assertEqual(int(t.segments[0]), 2)
+    self.assertEqual(int(t.passed_segments[0]), 1)
+    self.assertEqual(int(t.linear_failed_segments[0]), 1)
+    self.assertEqual(int(t.yaw_failed_segments[0]), 0)
+
+  def test_persistent_error_still_fails_the_pooled_criterion(self):
+    t = self.make_tracker()
+    cmd = torch.tensor([[.3, 0., 0.]])
+    for actual in (torch.zeros(1, 3), cmd):
+      for _ in range(6):
+        t.observe(cmd, actual, torch.zeros(1, 3))
+      t.finish_segments(torch.tensor([0]))
     self.assertFalse(bool(t.success(torch.tensor([0]))[0]))
+
+  def test_sixty_percent_relative_limit_relaxes_tracking_but_rejects_standing(self):
+    t = self.make_tracker(4)
+    command = torch.tensor([[.15, 0., 0.], [.15, 0., 0.], [0., 0., .15], [0., 0., .15]])
+    actual = torch.tensor([[.065, 0., 0.], [0., 0., 0.], [0., 0., 0.], [0., 0., 0.]])
+    angular = torch.tensor([[0., 0., 0.], [0., 0., 0.], [0., 0., .065], [0., 0., 0.]])
+    for _ in range(8):
+      t.observe(command, actual, angular)
+    t.finish_segments(torch.arange(4))
+    self.assertEqual(t.success(torch.arange(4)).tolist(), [True, False, True, False])
+
+  def test_opposite_commands_and_standing_phases_do_not_cancel_stationary_errors(self):
+    t = self.make_tracker(2)
+    for sign in (1., -1.):
+      command = torch.tensor([[sign * .15, 0., 0.], [.15 if sign > 0 else 0., 0., 0.]])
+      for _ in range(8):
+        t.observe(command, torch.zeros(2, 3), torch.zeros(2, 3))
+      t.finish_segments(torch.arange(2))
+    self.assertEqual(t.success(torch.arange(2)).tolist(), [False, False])
+
+  def test_short_tail_is_excluded_from_both_episode_label_and_logged_rms(self):
+    t = self.make_tracker()
+    command = torch.tensor([[.3, 0., 0.]])
+    for _ in range(8):
+      t.observe(command, command, torch.zeros(1, 3))
+    t.finish_segments(torch.tensor([0]))
+    for _ in range(3):  # two settling steps and one sample, below the two-sample minimum
+      t.observe(command, torch.full((1, 3), 100.), torch.zeros(1, 3))
+    t.finish_segments(torch.tensor([0]))
+    self.assertEqual(int(t.total_samples[0]), 6)
+    self.assertEqual(float(t.total_error.sum()), 0.)
+    self.assertTrue(bool(t.success(torch.tensor([0]))[0]))
+
+  def test_diagnostics_distinguish_linear_and_yaw_failures_and_reset_per_env(self):
+    t = self.make_tracker(3)
+    command = torch.tensor([[.4, 0., .4]]).repeat(3, 1)
+    linear = torch.tensor([[.4, 0., 0.], [0., 0., 0.], [.4, 0., 0.]])
+    angular = torch.tensor([[0., 0., .4], [0., 0., .4], [0., 0., 0.]])
+    for _ in range(8):
+      t.observe(command, linear, angular)
+    t.finish_segments(torch.arange(3))
+    self.assertEqual(t.success(torch.arange(3)).tolist(), [True, False, False])
+    self.assertEqual(t.passed_segments.tolist(), [1, 0, 0])
+    self.assertEqual(t.linear_failed_segments.tolist(), [0, 1, 0])
+    self.assertEqual(t.yaw_failed_segments.tolist(), [0, 0, 1])
+    t.reset(torch.tensor([0, 2]))
+    self.assertEqual(t.segments.tolist(), [0, 1, 0])
+    self.assertEqual(t.passed_segments.tolist(), [0, 0, 0])
+    self.assertEqual(t.linear_failed_segments.tolist(), [0, 1, 0])
+    self.assertEqual(t.yaw_failed_segments.tolist(), [0, 0, 0])
 
   def test_no_scored_segment_and_nonfinite_states_are_not_successes(self):
     t = self.make_tracker(2)
@@ -183,8 +249,13 @@ class IntegrationTests(unittest.TestCase):
     old_ids = c.config_ids.clone()
     for i in range(10):
       self.step(c, e, timeout=i == 9)
-    c.on_reset(torch.tensor([1, 3]))
+    stats = c.on_reset(torch.tensor([1, 3]))
     self.assertEqual(c.recorded, 2)
+    self.assertEqual(float(stats["segment_success_rate"]), 1.)
+    self.assertEqual(float(stats["full_timeout_rate"]), 1.)
+    self.assertEqual(float(stats["linear_failed_rate"]), 0.)
+    self.assertEqual(float(stats["yaw_failed_rate"]), 0.)
+    self.assertEqual(int(stats["recent_successes"]), 2)
     self.assertEqual(int(c.sampler.counts.sum()), 2)
     expected = torch.bincount(old_ids[[1, 3]], minlength=c.bank_size)
     torch.testing.assert_close(c.sampler.counts, expected)
@@ -196,9 +267,58 @@ class IntegrationTests(unittest.TestCase):
   def test_fall_during_settling_is_a_failure(self):
     c, e = make_command(1)
     self.step(c, e, terminal=True)
-    c.on_reset(torch.tensor([0]))
+    stats = c.on_reset(torch.tensor([0]))
     self.assertEqual(c.recorded, 1)
     self.assertFalse(bool(c.sampler.history.any()))
+    self.assertEqual(float(stats["terminated_rate"]), 1.)
+    self.assertEqual(float(stats["no_valid_segment_rate"]), 1.)
+    self.assertEqual(float(stats["segment_success_rate"]), 0.)
+
+  def test_recovered_segment_is_credited_using_episode_rms_and_consistent_failure_logs(self):
+    c, e = make_command(1)
+    c.config_ids.fill_(c.buckets.names.index("mixed_forward/0"))
+    c.vel_command_b[:] = torch.tensor([.4, 0., 0.])
+    credited_id = c.config_ids.clone()
+    for i in range(10):
+      e.episode_length_buf += 1
+      e.termination_manager.get_term("time_out").fill_(i == 9)
+      e.reset_buf.fill_(i == 9)
+      c.robot.data.root_link_lin_vel_b[:] = torch.tensor([.15 if i < 5 else .4, 0., 0.])
+      c.robot.data.root_link_ang_vel_b.zero_()
+      c.observe_step()
+      if i == 4:
+        c.outcome.finish_segments(torch.tensor([0]))
+    stats = c.on_reset(torch.tensor([0]))
+    self.assertEqual(float(stats["success_rate"]), 1.)
+    self.assertEqual(float(stats["segment_success_rate"]), .5)
+    self.assertEqual(float(stats["linear_failed_rate"]), 0.)
+    self.assertEqual(float(stats["yaw_failed_rate"]), 0.)
+    self.assertAlmostEqual(float(stats["linear_rms"]), .25 / 2**.5, places=6)
+    self.assertEqual(int(c.sampler.history[credited_id].sum()), 1)
+
+  def test_diagnostic_rates_exclude_censored_episodes(self):
+    c, e = make_command(3)
+    c.config_ids.fill_(c.buckets.names.index("mixed_forward/0"))
+    c.vel_command_b[:] = torch.tensor([.4, 0., .4])
+    c._censored[2] = True
+    for i in range(10):
+      e.episode_length_buf += 1
+      e.termination_manager.get_term("time_out").fill_(i == 9)
+      e.reset_buf.fill_(i == 9)
+      c.robot.data.root_link_lin_vel_b.copy_(c.command)
+      c.robot.data.root_link_lin_vel_b[[0, 2], 0] += 1.
+      c.robot.data.root_link_ang_vel_b[:, 2] = c.command[:, 2]
+      c.robot.data.root_link_ang_vel_b[[1, 2], 2] += 1.
+      c.observe_step()
+    stats = c.on_reset(torch.arange(3))
+    self.assertEqual(c.recorded, 2)
+    self.assertEqual(c.skipped, 1)
+    self.assertEqual(float(stats["linear_failed_rate"]), .5)
+    self.assertEqual(float(stats["yaw_failed_rate"]), .5)
+    self.assertEqual(float(stats["segment_success_rate"]), 0.)
+    self.assertEqual(float(stats["full_timeout_rate"]), 1.)
+    self.assertEqual(float(stats["terminated_rate"]), 0.)
+    self.assertEqual(int(stats["recent_successes"]), 0)
 
   def test_boundary_manual_and_short_initial_timeouts_are_excluded(self):
     for reason in ("boundary", "manual", "short", "nan"):
@@ -306,6 +426,14 @@ class IntegrationTests(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "warm-start"):
       c.load_sgs_state_dict({"spec": {"version": 1}})
 
+  def test_old_segment_criterion_is_rejected_even_with_matching_numeric_thresholds(self):
+    c, _ = make_command(1)
+    saved = c.sgs_state_dict()
+    saved["spec"]["version"] = 2
+    saved["spec"].pop("success_aggregation")
+    with self.assertRaisesRegex(ValueError, "reset-sgs-history"):
+      c.load_sgs_state_dict(saved)
+
   def test_manual_joystick_censors_only_the_selected_environment(self):
     c, e = make_command(2)
     c._joystick_enabled = SimpleNamespace(value=True)
@@ -371,8 +499,38 @@ class IntegrationTests(unittest.TestCase):
     self.assertTrue(play.commands["twist"].evaluation)
     self.assertEqual(play.episode_length_s, 20.)
     self.assertEqual(sgs.commands["twist"].sgs.velocity_subdivisions, 2)
+    self.assertEqual(sgs.commands["twist"].sgs.relative_error, .6)
+    self.assertEqual(play.commands["twist"].sgs.relative_error, .6)
     self.assertEqual(asdict(sgs.events["reset_base"]), asdict(base.events["reset_base"]))
     self.assertIs(load_runner_cls("Unitree-Go2W-Perceptive-Rough-v2-SGS"), Go2WSGSRunner)
+
+  def test_history_reset_resumes_without_restarting_optimizer_or_curricula(self):
+    from src.tasks.velocity.rl.sgs_runner import Go2WSGSRunner
+    from src.tasks.velocity.rl.go2w_runner import Go2WOnPolicyRunner
+    command, env = make_command()
+    command.sampler.update(torch.tensor([0]), torch.tensor([True]))
+    command.recorded, command.skipped = 13, 4
+    command.cfg.reset_sgs_history = True
+    env.common_step_counter = 195120
+    runner = object.__new__(Go2WSGSRunner)
+    runner.env = SimpleNamespace(unwrapped=env)
+    runner.current_learning_iteration = 8130
+    runner.alg = SimpleNamespace(optimizer=SimpleNamespace(state={0: "momentum"},
+      param_groups=[{"lr": .0002}]), learning_rate=.0002)
+    with patch.object(Go2WOnPolicyRunner, "load", return_value={"sgs_state": {"spec": {"version": 2}}}) as parent:
+      with self.assertWarnsRegex(UserWarning, "Reset SGS history"):
+        runner.load("unused.pt")
+      self.assertIsNone(parent.call_args.args[1])  # normal full-training restore
+    self.assertEqual(runner.current_learning_iteration, 8130)
+    self.assertEqual(env.common_step_counter, 195120)
+    self.assertEqual(runner.alg.optimizer.state, {0: "momentum"})
+    self.assertEqual(runner.alg.optimizer.param_groups, [{"lr": .0002}])
+    self.assertEqual(int(command.sampler.counts.sum()), 0)
+    self.assertEqual(int(command.sampler.parent.counts.sum()), 0)
+    self.assertFalse(bool(command.sampler.history.any()))
+    self.assertFalse(bool(command.sampler.parent.history.any()))
+    self.assertEqual((command.recorded, command.skipped), (0, 0))
+    self.assertTrue(bool(command._censored.all()))
 
   def test_multi_process_use_fails_explicitly(self):
     from src.tasks.velocity.rl.sgs_runner import Go2WSGSRunner

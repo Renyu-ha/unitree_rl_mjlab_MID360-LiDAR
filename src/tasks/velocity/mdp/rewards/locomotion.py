@@ -601,22 +601,30 @@ def early_lift_without_step_penalty(
   return cost
 
 
-def forward_velocity_floor(
+def dont_wait(
   env: ManagerBasedRlEnv,
-  min_velocity: float,
   command_name: str,
-  command_threshold: float = 0.1,
+  command_threshold: float = 0.2,
+  slow_velocity_threshold: float = 0.15,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-  """Penalize moving too slowly when a forward command is active."""
+  """Penalize slow or opposite motion along an active planar command.
+
+  Extend robot_lab's ``dont_wait`` tiers to forward, reverse and lateral motion.
+  Small translation commands and pure yaw commands are left to velocity tracking.
+  """
   asset: Entity = env.scene[asset_cfg.name]
   command = env.command_manager.get_command(command_name)
   assert command is not None
-  actual_x = asset.data.root_link_lin_vel_b[:, 0]
-  active = (command[:, 0] > command_threshold).float()
-  deficit = torch.clamp(min_velocity - actual_x, min=0.0)
-  env.extras["log"]["Metrics/forward_velocity_deficit_mean"] = torch.mean(deficit)
-  return torch.square(deficit / min_velocity) * active
+  command_xy = command[:, :2]
+  command_speed = torch.linalg.vector_norm(command_xy, dim=1)
+  direction = command_xy / command_speed.clamp_min(1e-6).unsqueeze(1)
+  progress_speed = torch.sum(asset.data.root_link_lin_vel_b[:, :2] * direction, dim=1)
+
+  cost = (progress_speed < slow_velocity_threshold).float()
+  cost += (progress_speed < 0.0).float()
+  cost += (progress_speed < -slow_velocity_threshold).float()
+  return cost * (command_speed > command_threshold).float()
 
 
 def yaw_rate_l2_when_straight(

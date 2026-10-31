@@ -93,6 +93,7 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
     report = {"checkpoint": str(checkpoint), "seed": seed, "sampler": "uniform",
       "sampling_measure": "uniform terrain/category, uniform speed sub-bin within category",
       "task_distribution": command.buckets.description(),
+      "success_aggregation": command.checkpoint_spec()["success_aggregation"],
       "success_settings": asdict(command.cfg.sgs), "overall": summary(records),
       "by_terrain": {name: summary([r for r in records if r["terrain"] == name]) for name in names},
       "by_command_category": {name: summary([r for r in records if r["command_category"] == name])

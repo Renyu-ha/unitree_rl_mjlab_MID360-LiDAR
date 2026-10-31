@@ -649,9 +649,9 @@ def _configure_rewards(
     # Failure termination (timeouts are excluded by is_terminated).
     "is_terminated": RewardTermCfg(func=mdp.is_terminated, weight=-200.0),
   }
-  cfg.rewards["forward_velocity_floor"] = RewardTermCfg(
-    func=mdp.forward_velocity_floor, weight=-0.75,
-    params={"min_velocity": 0.22, "command_name": "twist", "command_threshold": 0.1},
+  cfg.rewards["dont_wait"] = RewardTermCfg(
+    func=mdp.dont_wait, weight=-0.1,
+    params={"command_name": "twist", "command_threshold": 0.2, "slow_velocity_threshold": 0.15},
   )
   cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
     func=mdp.yaw_rate_l2_when_straight, weight=-0.90,
@@ -675,11 +675,7 @@ def _configure_rewards(
     },
   )
   if stepup:
-    # StepUp adds forward progress and straight-line stability terms.
-    cfg.rewards["forward_velocity_floor"] = RewardTermCfg(
-      func=mdp.forward_velocity_floor, weight=-1.2,
-      params={"min_velocity": 0.22, "command_name": "twist", "command_threshold": 0.1},
-    )
+    # StepUp keeps its straight-line stability terms and the shared V2 dont_wait.
     cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
       func=mdp.yaw_rate_l2_when_straight, weight=-0.60,
       params={"command_name": "twist", "command_x_threshold": 0.1,

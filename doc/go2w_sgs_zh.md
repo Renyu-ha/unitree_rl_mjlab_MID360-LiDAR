@@ -18,7 +18,9 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene
 
 使用相同种子、PPO 参数、区间和训练预算比较。GPU 参数必须采用列表语法 `[1]`，不能写成整数 `1`。未限制 CUDA_VISIBLE_DEVICES 时选择物理 GPU 1，进程内日志显示 cuda:0 属于正常映射。SGS 目前仅支持单训练进程/单 GPU。
 
-原 v2、Gait、StepUp 等任务保留原机制。SGS 继承 v2 的 PPO、镜像增强、奖励、混合动作、720 维 Actor 历史输入及 MID360 观测。日志位于 `logs/rsl_rl/go2w_perceptive/`。
+原 v2、Gait、StepUp 等任务保留各自的课程与采样机制。SGS 继承 v2 的 PPO、镜像增强、奖励、混合动作、720 维 Actor 历史输入及 MID360 观测。日志位于 `logs/rsl_rl/go2w_perceptive/`。
+
+各训练配置原有的 `forward_velocity_floor` 已统一替换为 `dont_wait`，权重 `-0.1`：仅当平移指令模长大于 `0.2 m/s` 时启用，实际 XY 速度沿指令方向的投影低于 `0.15 m/s`、`0`、`-0.15 m/s` 时分别累加一档代价。低速指令和纯转向不启用此项，准确跟随低速不会再因未达到固定 `0.22 m/s` 被惩罚。速度跟踪奖励继续负责跟踪精度。
 
 ## 任务与速度覆盖
 
@@ -62,22 +64,24 @@ python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS-Uniform --env.scene
 
 SGS 接管地形分配，关闭原来的距离升降地形课程和逐步扩大速度范围课程；奖励权重课程及 MID360 感知课程继续运行。
 
-可通过 `--env.commands.twist.sgs.velocity-subdivisions` 调整统计分辨率：1 对应默认地图 2160 项，2（默认）对应 4230 项，4 对应 8370 项，8 对应 16650 项。所有设置都会在线生成连续速度；增加子区间不扩大速度总范围，但会缩小同一回合内重新采样速度的范围。更改细分数量需要新实验或权重热启动。此次只调整默认细分数量，成功标准、采样超参数、出生随机化、地形和 PPO 设置保持原配置。
+可通过 `--env.commands.twist.sgs.velocity-subdivisions` 调整统计分辨率：1 对应默认地图 2160 项，2（默认）对应 4230 项，4 对应 8370 项，8 对应 16650 项。所有设置都会在线生成连续速度；增加子区间不扩大速度总范围，但会缩小同一回合内重新采样速度的范围。更改细分数量需要清空 SGS 历史或新实验；细分数量不决定成功标准。
 
 ## 成功定义
 
 物理步完成后、自动重置及命令更新之前，比较真实基座机体速度与该步实际执行指令。每次重新采样指令后的前 0.6 秒留作响应时间；heading 每步反馈不重启宽限期。
 
-每段至少有 1 秒有效计分时间，计算平移误差 `sqrt(mean((vx-cx)^2+(vy-cy)^2))` 和转向误差 `sqrt(mean((wz-cw)^2))`。条件为：
+每段至少有 1 秒有效计分时间，满足时长的段才纳入统计。将这些段在宽限期之后的样本合并，计算整回合平移误差 `sqrt(mean((vx-cx)^2+(vy-cy)^2))` 和转向误差 `sqrt(mean((wz-cw)^2))`，按有效样本数加权，不平均各段的 RMS，也不要求每段都通过。条件为：
 
 | 情况 | 误差上限（严格小于） |
 | --- | --- |
-| 非零平移 | `min(0.2 m/s, 0.5*指令平移RMS)` |
+| 非零平移 | `min(0.2 m/s, 0.6*整回合指令平移RMS)` |
 | 零平移 | `0.1 m/s` |
-| 非零转向 | `min(0.35 rad/s, 0.5*指令转向RMS)` |
+| 非零转向 | `min(0.35 rad/s, 0.6*整回合指令转向RMS)` |
 | 零转向 | `0.15 rad/s` |
 
-一次成功要求完整跑满 20 秒、没有失败终止、至少一个有效段且所有有效段通过。前面失败的段不能被后面平均掉；不足 1 秒计分的尾段不参与判定。跌倒即使发生在宽限期内也记失败。人工重置、手柄接管、初次随机缩短回合、地图越界及非有限状态排除。
+一次成功要求完整跑满 20 秒、没有失败终止、至少一个有效段且整回合两项 RMS 通过。不足 1 秒计分的尾段既不参与成功判定，也不进入打印的整回合 RMS。跌倒即使发生在宽限期内也记失败。人工重置、手柄接管、初次随机缩短回合、地图越界及非有限状态排除。
+
+相较旧版，取消了逐段一票否决，相对误差比例从 50% 放宽到 60%；绝对上限、静止门槛、宽限期和完整回合要求保持不变。例如 `0.15 m/s` 指令的线速度误差上限由 `0.075` 放宽到 `0.09 m/s`，但原地不动仍不合格。先对误差和指令分别求平方均值，再开方，前进/后退或左右转向的正负切换不会互相抵消。
 
 这些门槛是尚未实机标定的初始值。成功标签只用于 SGS 统计，不增加奖励或成功终止。
 
@@ -109,19 +113,41 @@ bank-seed + agent.seed 初始化指令随机流；任务选择使用单独随机
 
 日志前缀 `Curriculum/sgs_sampling/`：success_rate 是当前有效重置成功率，bank_success 是已访问细分配置的原始近期成功率均值，bank_coverage/group_coverage 是两层访问覆盖率，min_visits 是最低访问次数，configurations 是统计项总数；另有有效/排除计数及速度 RMS。采样分布一直变化，训练成功率不能替代独立评估。
 
+成功率长期为零时，可结合以下诊断项定位；逐段诊断不再否决整回合标签：
+
+| 字段 | 含义 |
+| --- | --- |
+| segment_success_rate | 当前有效结束回合内，通过平移和转向两项判据的有效指令段比例 |
+| linear_failed_rate | 整回合平移 RMS 超标的回合比例 |
+| yaw_failed_rate | 整回合转向 RMS 超标的回合比例 |
+| terminated_rate | 发生失败终止的回合比例 |
+| full_timeout_rate | 无失败终止且完整跑满时长的回合比例 |
+| no_valid_segment_rate | 没有任何满足计分时长要求的指令段的回合比例 |
+| recent_successes | 全部细分配置近期历史窗口内的真实成功记录条数，不含平滑先验，不是累计成功数 |
+
+除 recent_successes 外，各项只统计当前批次有效回合；segment_success_rate 按段计数，其余比例按回合计数。linear_failed_rate/yaw_failed_rate 对应当前整回合判据，即使 segment_success_rate 小于 1，整回合仍可能成功。失败原因可以重叠，不能相加当作总失败率。RSL-RL 仍对本轮各次上报取平均，因此比例不是整轮按回合或指令段数量加权的汇总。recent_successes 显示的是窗口成功条数快照均值，有助于分辨 bank_success 保留四位小数后显示零与窗口里完全没有成功。
+
 ## 保存、续训与旧模型
 
 checkpoint 的 infos.sgs_state 保存区间定义、两层历史及计数、任务选择和指令生成两条随机流，照常导出 ONNX 与部署 YAML。同一编号或父组同时完成的结果逐一写入，超过窗口大小时保留最新结果。
 
-正常续训保持相同任务定义与成功判据：
+当前 checkpoint 为版本 3，记录 `success_aggregation=episode_rms`。同版本、相同任务定义与成功判据下，正常续训会恢复 SGS 历史：
 
-此前每类 8 份、16650 项的连续区间 checkpoint，不能直接恢复到默认每类 2 份、4230 项的统计表。若继续原来的 8 份实验，续训命令需加 `--env.commands.twist.sgs.velocity-subdivisions=8`；若切换到 2 份，需开启新实验或使用下述权重热启动。
+此前每类 8 份、16650 项的连续区间 checkpoint，不能直接恢复到默认每类 2 份、4230 项的统计表。旧版逐段判据的版本 2 历史也不能与新判据混用。
 
 ```bash
 python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --gpu-ids "[1]" --agent.resume=True --agent.load-run=运行目录名 --agent.load-checkpoint=model_1000.pt
 ```
 
-旧固定序列/固定出生 checkpoint 是版本 1，当前是版本 2，成功历史不兼容。可在模型结构匹配时仅加载 Actor/Critic 权重（含观测归一化），清空优化器、迭代数、课程计数和 SGS 历史：
+从旧判据模型继续训练时，推荐只清空 SGS 历史，保留 Actor/Critic、观测归一化、优化器、学习率、迭代数和课程进度：
+
+```bash
+python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --env.scene.num-envs=4096 --gpu-ids "[1]" --agent.resume=True --agent.load-run=旧运行目录名 --agent.load-checkpoint=model_8000.pt --env.commands.twist.reset-sgs-history=True
+```
+
+此选项从当前配置的全新 SGS 表与随机流开始，不读取旧的成功标签。新判据下保存 checkpoint 后，再次续训应移除 `reset-sgs-history=True`，避免反复清空统计。若保留 8 份细分，另加 `--env.commands.twist.sgs.velocity-subdivisions=8`。旧版成功率与新版成功率不应直接比较。
+
+旧固定序列/固定出生 checkpoint 是版本 1。若希望同时重启优化器及课程，也可在模型结构匹配时使用权重热启动，只加载 Actor/Critic（含观测归一化）：
 
 ```bash
 python scripts/train.py Unitree-Go2W-Perceptive-Rough-v2-SGS --gpu-ids "[1]" --agent.resume=True --agent.load-run=旧运行目录名 --agent.load-checkpoint=model_1000.pt --env.commands.twist.warm-start=True

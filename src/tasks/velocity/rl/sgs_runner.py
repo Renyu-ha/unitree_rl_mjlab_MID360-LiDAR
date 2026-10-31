@@ -38,19 +38,18 @@ class Go2WSGSRunner(Go2WOnPolicyRunner):
         self.alg.learning_rate = initial_lr
         for group in self.alg.optimizer.param_groups:
           group["lr"] = initial_lr
-      command.sampler.history.zero_()
-      command.sampler.counts.zero_()
-      command.sampler.parent.history.zero_()
-      command.sampler.parent.counts.zero_()
-      command.recorded = command.skipped = 0
-      command._censored.fill_(True)
+      command.reset_sgs_history()
       warnings.warn("Warm start: loaded actor/critic weights; optimizer, iteration, curricula and SGS history start fresh.",
         stacklevel=2)
       return infos
     # Play uses a fresh uniform bank. Actor-only warm starts also keep a fresh
     # sampler rather than mixing success histories from a different policy.
     if not command.cfg.evaluation and load_cfg is None:
-      if infos and "sgs_state" in infos:
+      if command.cfg.reset_sgs_history:
+        command.reset_sgs_history()
+        warnings.warn("Reset SGS history: kept model, optimizer, iteration and curriculum progress; "
+          "success statistics start fresh under the current criterion.", stacklevel=2)
+      elif infos and "sgs_state" in infos:
         command.load_sgs_state_dict(infos["sgs_state"])
       else:
         warnings.warn("Checkpoint has no SGS history; starting with an unvisited bank", stacklevel=2)

@@ -26,7 +26,7 @@ class SGSConfig:
   min_segment_s: float = 1.0
   linear_rms: float = 0.2
   yaw_rms: float = 0.35
-  relative_error: float = 0.5
+  relative_error: float = 0.6
   standing_linear_rms: float = 0.1
   standing_yaw_rms: float = 0.15
 
@@ -145,7 +145,7 @@ class SuccessGuidedSampler:
 
 
 class VelocityTrackingOutcome:
-  """One Boolean episode outcome, requiring every sufficiently long segment to pass.
+  """One Boolean outcome from pooled samples of sufficiently long command segments.
 
   Inputs are effective body-frame commands held during the just-completed step.
   Heading feedback changing the command does not restart the settling timer.
@@ -159,6 +159,9 @@ class VelocityTrackingOutcome:
     self.steps = torch.zeros_like(self.age)
     self.samples = torch.zeros_like(self.age)
     self.segments = torch.zeros_like(self.age)
+    self.passed_segments = torch.zeros_like(self.age)
+    self.linear_failed_segments = torch.zeros_like(self.age)
+    self.yaw_failed_segments = torch.zeros_like(self.age)
     self.sums = torch.zeros(num_envs, 4, device=device)  # error xy, yaw; command xy, yaw
     self.total_error = torch.zeros(num_envs, 2, device=device)
     self.total_command = torch.zeros_like(self.total_error)
@@ -178,29 +181,46 @@ class VelocityTrackingOutcome:
     self.age += 1
     self.steps += 1
 
-  def finish_segments(self, ids):
-    n = self.samples[ids]
-    rms = torch.sqrt(self.sums[ids] / n.clamp(min=1)[:, None])
+  def _tracking_passes(self, rms):
     c = self.cfg
     lin_limit = torch.where(rms[:, 2] > 0,
       (c.relative_error * rms[:, 2]).clamp(max=c.linear_rms), c.standing_linear_rms)
     yaw_limit = torch.where(rms[:, 3] > 0,
       (c.relative_error * rms[:, 3]).clamp(max=c.yaw_rms), c.standing_yaw_rms)
+    return rms[:, 0] < lin_limit, rms[:, 1] < yaw_limit
+
+  def finish_segments(self, ids):
+    n = self.samples[ids]
+    rms = torch.sqrt(self.sums[ids] / n.clamp(min=1)[:, None])
     valid = n >= self.min_samples
-    self.passed[ids] &= ~valid | ((rms[:, 0] < lin_limit) & (rms[:, 1] < yaw_limit))
+    linear_pass, yaw_pass = self._tracking_passes(rms)
+    segment_pass = linear_pass & yaw_pass
+    self.passed[ids] &= ~valid | segment_pass
     self.segments[ids] += valid
-    self.total_error[ids] += self.sums[ids, :2]
-    self.total_command[ids] += self.sums[ids, 2:]
-    self.total_samples[ids] += n
+    self.passed_segments[ids] += valid & segment_pass
+    self.linear_failed_segments[ids] += valid & ~linear_pass
+    self.yaw_failed_segments[ids] += valid & ~yaw_pass
+    # Pool squared errors, not RMS values or Boolean segment outcomes. Short
+    # tails remain excluded, matching the minimum scored duration above.
+    self.total_error[ids] += torch.where(valid[:, None], self.sums[ids, :2], 0.0)
+    self.total_command[ids] += torch.where(valid[:, None], self.sums[ids, 2:], 0.0)
+    self.total_samples[ids] += torch.where(valid, n, 0)
     self.samples[ids] = 0
     self.sums[ids] = 0
     self.age[ids] = 0
 
+  def episode_passes(self, ids):
+    rms = torch.sqrt(torch.cat((self.total_error[ids], self.total_command[ids]), dim=1)
+      / self.total_samples[ids].clamp(min=1)[:, None])
+    return self._tracking_passes(rms)
+
   def success(self, ids):
-    return self.passed[ids] & self.finite[ids] & (self.segments[ids] > 0)
+    linear_pass, yaw_pass = self.episode_passes(ids)
+    return linear_pass & yaw_pass & self.finite[ids] & (self.segments[ids] > 0)
 
   def reset(self, ids):
     self.age[ids] = self.steps[ids] = self.samples[ids] = self.segments[ids] = 0
+    self.passed_segments[ids] = self.linear_failed_segments[ids] = self.yaw_failed_segments[ids] = 0
     self.sums[ids] = self.total_error[ids] = 0
     self.total_command[ids] = 0
     self.total_samples[ids] = 0
