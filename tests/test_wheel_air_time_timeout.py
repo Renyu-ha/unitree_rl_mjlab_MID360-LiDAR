@@ -72,24 +72,16 @@ class WheelAirTimeTimeoutTests(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "track_air_time=True"):
       self.cost(env)
 
-  def test_all_go2w_train_and_play_variants_enable_timeout(self):
+  def test_go2w_disables_timeout_but_keeps_contact_timing_for_other_terms(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-"):
         continue
       for play in (False, True):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
-          if task.endswith("-Gait"):
-            self.assertNotIn("wheel_air_time_timeout", cfg.rewards)
-            continue
-          term = cfg.rewards["wheel_air_time_timeout"]
-          self.assertIs(term.func, wheel_air_time_timeout)
-          self.assertEqual(term.weight, -.5)
-          self.assertEqual(term.params["ramp_time"], .25)
-          self.assertEqual(term.params["threshold"], .7 if "StepUp" in task else .5)
-          self.assertEqual(term.params["sensor_name"], "feet_ground_contact")
+          self.assertNotIn("wheel_air_time_timeout", cfg.rewards)
           sensor = next(sensor for sensor in cfg.scene.sensors
-                        if sensor.name == term.params["sensor_name"])
+                        if sensor.name == "feet_ground_contact")
           self.assertTrue(sensor.track_air_time)
 
 

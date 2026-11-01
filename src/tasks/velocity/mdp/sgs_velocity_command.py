@@ -6,6 +6,7 @@ import torch
 
 from .deadzone_velocity_command import DeadzoneVelocityCommand, DeadzoneVelocityCommandCfg
 from .sgs import SGSConfig, SuccessGuidedSampler, VelocityTrackingOutcome
+from .terrain_velocity_bank import make_terrain_velocity_bank
 from .velocity_buckets import make_velocity_buckets
 
 
@@ -37,15 +38,18 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
     if cfg.resampling_time_range[1] < cfg.resampling_time_range[0]:
       raise ValueError("SGS command interval bounds are reversed")
     self.rows, self.cols = terrain.terrain_origins.shape[:2]
+    generator = terrain.cfg.terrain_generator
+    if not generator.curriculum or len(generator.sub_terrains) != self.cols:
+      raise ValueError("SGS terrain velocity rules require one named terrain type per column")
     self.buckets = make_velocity_buckets(cfg.ranges, c.velocity_subdivisions,
       heading_command=cfg.heading_command, device=env.device)
     self.bucket_count = self.buckets.size
     self.category_count = len(self.buckets.categories)
-    self.bank_size = self.rows * self.cols * self.bucket_count
-    tiles = torch.arange(self.rows * self.cols, device=env.device)
-    groups = (tiles[:, None] * self.category_count + self.buckets.category_ids).flatten()
+    self.bank = make_terrain_velocity_bank(self.rows, generator.sub_terrains, self.buckets,
+      longitudinal_from_level=c.longitudinal_from_level)
+    self.bank_size = self.bank.size
     self.sampler = SuccessGuidedSampler(self.bank_size, c, env.device, (env.cfg.seed or 0) + 9017,
-      group_ids=groups)
+      group_ids=self.bank.group_ids, base_probs=self.bank.base_probs)
     # Separate streams: choosing tasks must not consume command-sampling draws.
     self.command_generator = torch.Generator(device=env.device).manual_seed(c.bank_seed + (env.cfg.seed or 0))
     self.outcome = VelocityTrackingOutcome(env.num_envs, c, env.step_dt, env.device)
@@ -66,7 +70,7 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
   def _resample_command(self, env_ids):
     if bool((self.config_ids[env_ids] < 0).any()):
       raise RuntimeError("SGS curriculum must assign a configuration before command reset")
-    p = self.config_ids[env_ids] % self.bucket_count
+    _, p = self.bank.decode(self.config_ids[env_ids])
     phase = self.profile_step[env_ids] % 2
     lo, hi = self.buckets.lower[p, phase], self.buckets.upper[p, phase]
     random = torch.rand(env_ids.numel(), 5, device=self.device, generator=self.command_generator)
@@ -147,7 +151,7 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
       "group_coverage": (self.sampler.parent.counts > 0).float().mean(),
       "min_visits": self.sampler.counts.min(), "configurations": self.bank_size}
     self.config_ids[ids] = self.sampler.sample(ids.numel())
-    tile = self.config_ids[ids] // self.bucket_count
+    tile, _ = self.bank.decode(self.config_ids[ids])
     terrain = env.scene.terrain
     terrain.terrain_levels[ids] = tile // self.cols
     terrain.terrain_types[ids] = tile % self.cols
@@ -159,8 +163,9 @@ class SGSVelocityCommand(DeadzoneVelocityCommand):
 
   def checkpoint_spec(self):
     events = getattr(self._env.cfg, "events", {})
-    return {"version": 3, "success_aggregation": "episode_rms", "distribution": "velocity_intervals",
+    return {"version": 4, "success_aggregation": "episode_rms", "distribution": "terrain_velocity_intervals",
       "shape": (self.rows, self.cols),
+      "configuration_bank": self.bank.description(),
       "ranges": asdict(self.cfg.ranges), "buckets": self.buckets.description(),
       "interval": self.cfg.resampling_time_range, "episode_s": self._env.max_episode_length_s,
       "terrain": _signature(self._env.scene.terrain.cfg.terrain_generator),

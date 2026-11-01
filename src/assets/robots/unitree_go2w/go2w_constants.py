@@ -35,6 +35,7 @@ WHEEL_GEOMS = (
   "RL_wheel_link_collision", "RR_wheel_link_collision",
 )
 WHEEL_RADIUS = 0.086  # metres, measured from the upstream wheel STL
+WHEEL_HALF_WIDTH = 0.0225  # metres, default cylinder collision half-width
 LEG_ACTION_SCALE = 0.5  # radians
 WHEEL_ACTION_SCALE = 20.0  # radians/second
 

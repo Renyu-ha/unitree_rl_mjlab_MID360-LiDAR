@@ -849,6 +849,6 @@ def stand_still(
             linear_norm = torch.norm(command[:, :2], dim=1)
             angular_norm = torch.abs(command[:, 2])
             total_command = linear_norm + angular_norm
-            scale = (total_command <= command_threshold).float()
+            scale = (total_command < command_threshold).float()
             reward *= scale
     return reward

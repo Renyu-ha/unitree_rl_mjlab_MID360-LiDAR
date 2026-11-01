@@ -32,6 +32,7 @@ class TrainCliTests(unittest.TestCase):
       "--env.commands.twist.ranges.lin-vel-x", "(-0.4, 0.9)",
       "--env.commands.twist.viz.scale", "0.75",
       "--env.commands.twist.sgs.velocity-subdivisions", "4",
+      "--env.commands.twist.sgs.longitudinal-from-level", "5",
       "--env.commands.twist.warm-start=True",
     )
     self.assertEqual(cfg.gpu_ids, [1])
@@ -39,6 +40,7 @@ class TrainCliTests(unittest.TestCase):
     self.assertEqual(cfg.env.commands["twist"].ranges.lin_vel_x, (-0.4, 0.9))
     self.assertEqual(cfg.env.commands["twist"].viz.scale, 0.75)
     self.assertEqual(cfg.env.commands["twist"].sgs.velocity_subdivisions, 4)
+    self.assertEqual(cfg.env.commands["twist"].sgs.longitudinal_from_level, 5)
     self.assertTrue(cfg.env.commands["twist"].warm_start)
 
   def test_non_sgs_multi_gpu_list(self):

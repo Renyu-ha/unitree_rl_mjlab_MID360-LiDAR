@@ -61,6 +61,9 @@ class Go2WDeployTests(unittest.TestCase):
       self.assertEqual(term["history_length"], 3)
     wheel_scale = self.env.observation_manager.get_term_cfg("actor", "wheel_vel").scale
     np.testing.assert_allclose(cfg["observations"]["wheel_vel"]["scale"], np.asarray(wheel_scale).reshape(-1))
+    ranges=self.env.command_manager.get_term("twist").cfg.ranges
+    for axis in ("lin_vel_x","lin_vel_y","ang_vel_z"):
+      self.assertEqual(cfg["commands"]["base_velocity"]["ranges"][axis],list(getattr(ranges,axis)))
     self.assertEqual(cfg["observations"]["joint_pos_rel"]["params"]["asset_cfg"]["joint_ids"], list(range(12)))
     self.assertEqual(cfg["stiffness"][12:], [0]*4)
     self.assertEqual(cfg["damping"][12:], [2]*4)

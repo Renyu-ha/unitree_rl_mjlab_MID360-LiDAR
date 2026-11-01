@@ -10,6 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+def _restore_terrain_velocity_settings(cfg, saved):
+  """Use a V4 checkpoint's allowed-task rules; legacy actors use today's defaults."""
+  state = (saved.get("infos") or {}).get("sgs_state", {})
+  if state.get("spec", {}).get("version", 0) >= 4:
+    settings = state["sampler"]["settings"]
+    for name in ("velocity_subdivisions", "longitudinal_from_level"):
+      setattr(cfg.commands["twist"].sgs, name, settings[name])
+
+
 def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20261031,
              output=Path("outputs/sgs_evaluation.json")):
   import torch
@@ -24,8 +33,10 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
     raise FileNotFoundError(checkpoint)
   if num_envs < 1 or episodes < 1:
     raise ValueError("num_envs and episodes must be positive")
+  saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
   task = "Unitree-Go2W-Perceptive-Rough-v2-SGS"
   cfg = load_env_cfg(task, play=True)
+  _restore_terrain_velocity_settings(cfg, saved)
   cfg.scene.num_envs, cfg.seed = num_envs, seed
   cfg.commands["twist"].sgs.bank_seed = seed
   cfg.scene.terrain.terrain_generator.seed = seed
@@ -34,7 +45,6 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
   try:
     wrapped = RslRlVecEnvWrapper(env)
     agent_cfg = load_rl_cfg(task)
-    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
     # Preserve user-selected MLP widths rather than requiring the factory defaults.
     for name in ("actor", "critic"):
       for key, value in (saved.get("infos") or {}).get("sgs_model_cfg", {}).get(name, {}).items():
@@ -48,6 +58,7 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
     runner.load(str(checkpoint), load_cfg={"actor": True}, map_location=device)
     policy = runner.get_inference_policy(device)
     command = env.command_manager.get_term("twist")
+    longitudinal_tiles = command.bank.longitudinal_tiles.cpu().tolist()
     records = []
     # Wait for fixed per-environment quotas, rather than favoring fast failures.
     remaining = [episodes // num_envs + int(i < episodes % num_envs) for i in range(num_envs)]
@@ -61,18 +72,21 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
           valid = result["valid"]
           env_ids = result["env_ids"][valid].cpu().tolist()
           ids = result["config_ids"][valid].cpu().tolist()
+          tile_ids, bucket_ids = command.bank.decode(result["config_ids"][valid])
+          tile_ids, bucket_ids = tile_ids.cpu().tolist(), bucket_ids.cpu().tolist()
           success = result["success"][valid].cpu().tolist()
           failed = result["terminated"][valid].cpu().tolist()
           rms = result["rms"][valid].cpu().tolist()
-          for env_id, config_id, passed, fell, error in zip(env_ids, ids, success, failed, rms):
+          for env_id, config_id, tile, bucket, passed, fell, error in zip(
+              env_ids, ids, tile_ids, bucket_ids, success, failed, rms):
             if remaining[env_id] == 0:
               continue
             remaining[env_id] -= 1
-            tile, bucket = divmod(config_id, command.bucket_count)
             category = int(command.buckets.category_ids[bucket])
             records.append({"env_id": env_id, "terrain": names[tile % command.cols], "level": tile // command.cols,
               "config_id": config_id, "velocity_bucket": command.buckets.names[bucket],
               "command_category": command.buckets.categories[category],
+              "longitudinal_only": longitudinal_tiles[tile],
               "success": passed, "fell": fell, "linear_rms": error[0], "yaw_rms": error[1]})
             if len(records) == episodes:
               break
@@ -91,8 +105,9 @@ def evaluate(checkpoint, *, num_envs=128, episodes=512, device="cuda:0", seed=20
         "yaw_rms_mean": sum(x["yaw_rms"] for x in rows) / len(rows)}
 
     report = {"checkpoint": str(checkpoint), "seed": seed, "sampler": "uniform",
-      "sampling_measure": "uniform terrain/category, uniform speed sub-bin within category",
+      "sampling_measure": "uniform terrain tile, uniform allowed category, uniform speed sub-bin",
       "task_distribution": command.buckets.description(),
+      "configuration_bank": command.bank.description(),
       "success_aggregation": command.checkpoint_spec()["success_aggregation"],
       "success_settings": asdict(command.cfg.sgs), "overall": summary(records),
       "by_terrain": {name: summary([r for r in records if r["terrain"] == name]) for name in names},

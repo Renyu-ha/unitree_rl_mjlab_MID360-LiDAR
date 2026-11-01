@@ -1,58 +1,36 @@
-# Go2W＋MID360：Ubuntu 22.04 x86_64
+# Go2W＋MID360：训练导出与 Ubuntu 22.04 部署
 
-本包按原作者 G1 的目录与入口适配 Go2W：`main.cpp → CtrlFSM → State_RLBase → ONNX`，仿真入口仍为 `simulate/build/unitree_mujoco`。SDK 的 `robots/go2w` 包装器已包含在内，无需另外找一个 Go2W SDK 仓库。
+训练继续使用本仓库原有 mjlab／RSL-RL 任务。部署采用 `deploy/rl_sar` 工作区中的原 C++／ROS 1 RL SDK 和 FSM。
 
-## 解压、编译、验证
+完整操作、雷达启动、观测动作、关节顺序、只读检查及真机步骤见 [Go2W 专用 README](../deploy/rl_sar/src/rl_sar/models/go2w/README.md)。复制到其他目录后，请在对应 RLSAR 工作区查找 `src/rl_sar/models/go2w/README.md`。
 
-```bash
-tar -xzf go2w_ubuntu22_x86_64.tar.gz
-cd go2w_ubuntu22_x86_64
-python3 scripts/verify_go2w_release.py
-bash scripts/build_go2w_ubuntu22.sh --install-deps
-python3 scripts/check_go2w_ubuntu22.py
-```
-
-没有桌面环境时，编译命令增加 `--headless`。构建使用系统 C++ 编译器、仓库 SDK、ONNX Runtime 1.22.0 和原仿真器配套的 MuJoCo 3.3.6；无需安装训练环境、CUDA、ROS 或 Python ONNX 包。自检启动两个实际 C++ 进程，使用 loopback DDS，结果写入 `outputs/go2w_selfcheck/`。
-
-自检策略是标记为 `smoke_*` 的常量策略，只验证通信、推理入口和保护逻辑。实机输出模式会拒绝它们。训练环境使用 MuJoCo 3.16.0，属于独立依赖，详见仓库训练说明。
-
-## 打开仿真窗口
-
-在两个终端分别运行：
-
-```bash
-simulate/build/unitree_mujoco --config simulate/config_go2w.yaml --auto
-```
-
-```bash
-deploy/robots/go2w/build/go2w_ctrl --sim --network=lo --domain=1 \
-  --policy tests/fixtures/go2w_deploy --actuate
-```
-
-`--auto` 会自动执行“阻尼 → 站立 → 策略”；换成已训练部署包可观察策略表现。仿真生成的点云和里程计用于验证部署接口，不模拟 MID360 的完整光学扫描。
-
-## 换入训练好的策略
-
-在已安装仓库训练环境的机器上，以实际训练任务重新导出：
+## 导出实际训练任务
 
 ```bash
 python scripts/prepare_go2w_deploy.py \
+  --checkpoint /path/to/model_XXXX.pt \
   --task Unitree-Go2W-Perceptive-Rough-v2 \
-  --checkpoint /path/to/model.pt --output /path/to/go2w_policy
+  --output /path/to/go2w_policy --device cpu
 ```
 
-将整个 `go2w_policy` 目录拷贝到 Ubuntu，再给 `--policy` 指定该路径。目录包含 `exported/policy.onnx` 和 `params/deploy.yaml`，两者必须配套。旧版 726 维模型不能当作当前 720 维模型直接使用；必须用训练时对应的代码和配置导出。
+`--task` 必须填写实际训练任务；不根据输入维度猜测检查点类型。复制整个输出目录，保留 `exported/policy.onnx` 和 `params/deploy.yaml`。
 
-## 实机接入
+v1 为240维，v2／SGS为720维，Gait为726维。所有任务使用12腿位置＋4轮速度动作，策略关节顺序为FL、FR、RL、RR腿，然后四个轮；SDK顺序另有映射。部署不得使用Nezha3的轮索引或复制G1关节配置。
 
-先按 [完整部署说明](doc/go2w_deploy_zh.md) 填写雷达到机体的实测外参、点云坐标系与独立里程计来源，完成吊装检查后设置 `safety.hardware_calibrated: true`，并停止其他运动控制程序。`eth0` 应替换为连接机器人的实际网卡。
+在 RLSAR 根目录显式生成原生配置：
 
 ```bash
-# 接收状态、运行推理，不发送电机指令
-deploy/robots/go2w/build/go2w_ctrl --network=eth0 --domain=0 --policy /path/to/go2w_policy
-
-# 完成吊装检查和校准后，显式启用电机输出
-deploy/robots/go2w/build/go2w_ctrl --network=eth0 --domain=0 --policy /path/to/go2w_policy --actuate
+python3 tools/import_go2w_policy.py \
+  --bundle /path/to/go2w_policy \
+  --output-config src/rl_sar/models/go2w/robot_lab/config.yaml
 ```
 
-手柄：`L2＋上` 站立，`R2＋A` 进入策略，`L2＋B` 回阻尼。代码与仿真联调不能替代实际电机方向、负载参数、雷达安装和训练策略的实机验证。
+## 与原 G1 部署的差异必须明确
+
+原 G1 部署只使用当前点云，没有里程计订阅。v1 当前帧观测可沿用这个输入集合。
+
+现有 v2 训练中的近场记忆使用实际前向速度；这一训练观测不能靠把里程计要求写进文档就算完成迁移，也不能静默关闭。RLSAR只保留训练需要的前向补偿，移除了另加的完整位姿重投影。没有实际速度输入时，v2的这项硬件闭环仍未验收。
+
+本次未改变既有PPO、SGS或Gait训练算法。修正了导出器写死的命令范围、实际网格参数和增益顺序声明，以及v1奖励引用不存在传感器的问题。旧独立DDS部署说明不再作为本次RLSAR交付的操作入口。
+
+本次不安装环境。Ubuntu22.04目标需要已有兼容的ROS1环境；完整ROS、Gazebo和实机运行需在目标机器上验收。

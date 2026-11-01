@@ -7,7 +7,7 @@ name = "unitree-rl-mjlab"
 version = "0.0.2"
 description = "Unitree Go2W and G1 MID360 perceptive locomotion tasks"
 license = "Apache-2.0"
-license-files = ["LICENCE"]
+license-files = ["LICENCE", "licenses/go2w-supermimic-MIT.txt"]
 requires-python = ">=3.11,<3.14"
 dependencies = [
   "mjlab @ git+https://github.com/mujocolab/mjlab.git@8bb2bc9e187797689ec82c78c35019afd2fd0376",

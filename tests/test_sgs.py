@@ -9,6 +9,7 @@ import torch
 
 from src.tasks.velocity.mdp.sgs import SGSConfig, SuccessGuidedSampler, VelocityTrackingOutcome
 from src.tasks.velocity.mdp.sgs_velocity_command import SGSVelocityCommandCfg
+from src.tasks.velocity.mdp.terrain_velocity_bank import make_terrain_velocity_bank
 from src.tasks.velocity.mdp.velocity_buckets import make_velocity_buckets
 
 
@@ -83,6 +84,92 @@ class SamplerTests(unittest.TestCase):
     s.update(torch.tensor([2, 2, 0, 0, 1, 1]), torch.tensor([True, True, False, False, False, False]))
     self.assertEqual(int(s.parent.counts[0]), 6)
     self.assertFalse(bool(s.parent.history.any()))
+
+  def test_custom_base_distribution_is_used_and_checked_on_restore(self):
+    cfg = SGSConfig(adaptive=False)
+    base = torch.tensor([.5, .25, .25])
+    sampler = SuccessGuidedSampler(3, cfg, group_ids=torch.tensor([0, 1, 1]), base_probs=base)
+    torch.testing.assert_close(sampler.probabilities(), base)
+    base.zero_()  # sampler owns its distribution
+    saved = sampler.state_dict()
+    saved["base_probs"] = torch.tensor([.4, .3, .3])
+    with self.assertRaisesRegex(ValueError, "base sampling distribution"):
+      sampler.load_state_dict(saved)
+    for invalid in ([0., .5, .5], [.2, .2, .2], [float("nan"), .5, .5], [.5, .5]):
+      with self.subTest(base=invalid), self.assertRaises(ValueError):
+        SuccessGuidedSampler(3, cfg, base_probs=invalid)
+
+
+class TerrainVelocityBankTests(unittest.TestCase):
+  def setUp(self):
+    from mjlab.tasks.registry import load_env_cfg
+    import src.tasks  # noqa: F401
+    self.cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2-SGS")
+    self.names = tuple(self.cfg.scene.terrain.terrain_generator.sub_terrains)
+    self.buckets = make_velocity_buckets(self.cfg.commands["twist"].ranges)
+    self.bank = make_terrain_velocity_bank(10, self.names, self.buckets)
+
+  def test_stairs_are_longitudinal_at_every_level_and_flat_always_keeps_all_commands(self):
+    for level in range(10):
+      for col, name in enumerate(self.names):
+        tile = level * len(self.names) + col
+        ids = self.bank.bucket_ids[self.bank.tile_ids == tile]
+        restricted = "stairs" in name or (name != "flat" and level >= 6)
+        self.assertEqual(len(ids), 17 if restricted else 47)
+        self.assertEqual(bool(self.bank.longitudinal_tiles[tile]), restricted)
+        if restricted:
+          self.assertTrue(bool((self.buckets.modes[ids] == 0).all()))
+          self.assertEqual(float(self.buckets.lower[ids, :, 1:].abs().sum()), 0.)
+          self.assertEqual(float(self.buckets.upper[ids, :, 1:].abs().sum()), 0.)
+          self.assertEqual({self.buckets.categories[i] for i in self.buckets.category_ids[ids].tolist()},
+            {"stand", "forward_low", "forward_mid", "forward_high", "backward_low", "backward_high",
+             "stand_to_forward", "forward_to_stand", "forward_backward"})
+    self.assertEqual(self.bank.size, 2550)
+    self.assertEqual(int(self.bank.longitudinal_tiles.sum()), 56)
+
+  def test_base_mass_stays_equal_per_tile_then_per_allowed_category(self):
+    mass = torch.zeros(90).scatter_add_(0, self.bank.tile_ids, self.bank.base_probs)
+    torch.testing.assert_close(mass, torch.full((90,), 1. / 90))
+    group_mass = torch.zeros(int(self.bank.group_ids.max()) + 1).scatter_add_(
+      0, self.bank.group_ids, self.bank.base_probs)
+    for tile in range(90):
+      groups = self.bank.group_ids[self.bank.tile_ids == tile].unique()
+      torch.testing.assert_close(group_mass[groups], torch.full((len(groups),), 1. / (90 * len(groups))))
+    cfg = SGSConfig()
+    sampler = SuccessGuidedSampler(self.bank.size, cfg, group_ids=self.bank.group_ids,
+      base_probs=self.bank.base_probs)
+    torch.testing.assert_close(sampler.probabilities(), self.bank.base_probs)
+    frontier = int((self.bank.tile_ids == self.names.index("pyramid_stairs")).nonzero()[0])
+    sampler.update(torch.arange(self.bank.size), torch.zeros(self.bank.size, dtype=torch.bool))
+    sampler.update(torch.full((32,), frontier), torch.arange(32) < 20)
+    self.assertGreater(float(sampler.probabilities()[frontier]), float(self.bank.base_probs[frontier]))
+    self.assertTrue(bool((sampler.probabilities() >= .1 * self.bank.base_probs).all()))
+
+  def test_level_boundary_is_configurable_without_reenabling_stair_sideways_tasks(self):
+    for level, expected in ((None, 3030), (0, 1830), (10, 3030)):
+      bank = make_terrain_velocity_bank(10, self.names, self.buckets, longitudinal_from_level=level)
+      self.assertEqual(bank.size, expected)
+    for subdivisions, expected in ((1, 1320), (4, 5010), (8, 9930)):
+      buckets = make_velocity_buckets(self.cfg.commands["twist"].ranges, subdivisions=subdivisions)
+      self.assertEqual(make_terrain_velocity_bank(10, self.names, buckets).size, expected)
+    with self.assertRaises(ValueError):
+      make_terrain_velocity_bank(10, self.names, self.buckets, longitudinal_from_level=-1)
+
+  def test_evaluation_restores_the_trained_rule_without_restoring_adaptive_sampling_or_seed(self):
+    from scripts.evaluate_sgs import _restore_terrain_velocity_settings
+    for level in (None, 5):
+      current = SGSConfig(adaptive=False, bank_seed=123)
+      cfg = SimpleNamespace(commands={"twist": SimpleNamespace(sgs=current)})
+      saved = {"infos": {"sgs_state": {"spec": {"version": 4}, "sampler": {"settings":
+        {"velocity_subdivisions": 4, "longitudinal_from_level": level, "adaptive": True, "bank_seed": 999}}}}}
+      _restore_terrain_velocity_settings(cfg, saved)
+      self.assertEqual(current.velocity_subdivisions, 4)
+      self.assertEqual(current.longitudinal_from_level, level)
+      self.assertFalse(current.adaptive)
+      self.assertEqual(current.bank_seed, 123)
+    cfg = SimpleNamespace(commands={"twist": SimpleNamespace(sgs=SGSConfig())})
+    _restore_terrain_velocity_settings(cfg, {"infos": {"sgs_state": {"spec": {"version": 3}}}})
+    self.assertEqual(cfg.commands["twist"].sgs.longitudinal_from_level, 6)
 
 
 class OutcomeTests(unittest.TestCase):
@@ -201,11 +288,13 @@ class Scene(dict):
   pass
 
 
-def make_command(n=5):
-  origins = torch.tensor([[[0., 0., 0.], [0., 8., 0.]], [[8., 0., 0.], [8., 8., 0.]]])
+def make_command(n=5, *, rows=2, terrain_names=("flat", "random_rough"), subdivisions=1):
+  origins = torch.tensor([[[row * 8., col * 8., 0.] for col in range(len(terrain_names))]
+    for row in range(rows)])
   terrain = SimpleNamespace(terrain_origins=origins, env_origins=torch.zeros(n, 3),
     terrain_levels=torch.zeros(n, dtype=torch.long), terrain_types=torch.zeros(n, dtype=torch.long),
-    cfg=SimpleNamespace(terrain_generator="seeded-test-map"))
+    cfg=SimpleNamespace(terrain_generator=SimpleNamespace(
+      curriculum=True, sub_terrains=dict.fromkeys(terrain_names))))
   data = SimpleNamespace(heading_w=torch.zeros(n), root_link_pos_w=torch.zeros(n, 3),
     root_link_quat_w=torch.tensor([[1., 0., 0., 0.]]).repeat(n, 1),
     root_link_lin_vel_b=torch.zeros(n, 3), root_link_ang_vel_b=torch.zeros(n, 3),
@@ -224,7 +313,7 @@ def make_command(n=5):
   cfg = SGSVelocityCommandCfg(entity_name="robot", resampling_time_range=(2., 3.), heading_command=True,
     ranges=SGSVelocityCommandCfg.Ranges(lin_vel_x=(-.3, .5), lin_vel_y=(-.3, .3), ang_vel_z=(-.5, .5),
       heading=(-3.14, 3.14)),
-    sgs=SGSConfig(velocity_subdivisions=1, settle_s=.2, min_segment_s=.2))
+    sgs=SGSConfig(velocity_subdivisions=subdivisions, settle_s=.2, min_segment_s=.2))
   command = cfg.build(env)
   env.command_manager = SimpleNamespace(get_term=lambda _: command)
   command.on_reset(torch.arange(n))
@@ -261,7 +350,7 @@ class IntegrationTests(unittest.TestCase):
     torch.testing.assert_close(c.sampler.counts, expected)
     self.assertTrue(bool(c.sampler.history.any()))
     self.assertEqual(c.outcome.steps.tolist(), [10, 0, 10, 0, 10])
-    tile = c.config_ids[[1, 3]] // c.bucket_count
+    tile, _ = c.bank.decode(c.config_ids[[1, 3]])
     torch.testing.assert_close(e.scene.env_origins[[1, 3]], e.scene.terrain.terrain_origins[tile // 2, tile % 2])
 
   def test_fall_during_settling_is_a_failure(self):
@@ -412,7 +501,9 @@ class IntegrationTests(unittest.TestCase):
     b = make_velocity_buckets(ranges)
     self.assertEqual(len(b.categories), 24)
     self.assertEqual(b.size, 47)
-    self.assertEqual(90 * b.size, 4230)
+    from mjlab.tasks.registry import load_env_cfg
+    names = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2-SGS").scene.terrain.terrain_generator.sub_terrains
+    self.assertEqual(make_terrain_velocity_bank(10, names, b).size, 2550)
     ids = [i for i, name in enumerate(b.names) if name.startswith("forward_")
       and not name.startswith(("forward_to_", "forward_backward"))]
     lo, hi = b.lower[ids, 0, 0], b.upper[ids, 0, 0]
@@ -433,6 +524,48 @@ class IntegrationTests(unittest.TestCase):
     saved["spec"].pop("success_aggregation")
     with self.assertRaisesRegex(ValueError, "reset-sgs-history"):
       c.load_sgs_state_dict(saved)
+
+  def test_old_cartesian_bank_is_rejected_even_when_the_shape_matches(self):
+    c, _ = make_command(1)
+    saved = c.sgs_state_dict()
+    saved["spec"]["version"] = 3
+    saved["spec"].pop("configuration_bank")
+    with self.assertRaisesRegex(ValueError, "reset-sgs-history"):
+      c.load_sgs_state_dict(saved)
+
+  def test_compact_ids_drive_the_correct_command_and_terrain_at_random_yaw(self):
+    names = ("flat", "pyramid_stairs", "random_rough")
+    c, e = make_command(8, rows=10, terrain_names=names, subdivisions=2)
+    eligible = c.bank.longitudinal_tiles[c.bank.tile_ids]
+    chosen = eligible.nonzero().flatten()[torch.linspace(0, int(eligible.sum()) - 1, 8).long()]
+    with patch.object(c.sampler, "sample", return_value=chosen):
+      c.on_reset(torch.arange(8))
+    tile, bucket = c.bank.decode(chosen)
+    self.assertTrue(bool((tile != chosen // c.bucket_count).any()))  # compact IDs need the lookup
+    torch.testing.assert_close(e.scene.env_origins, e.scene.terrain.terrain_origins[tile // 3, tile % 3])
+    self.assertEqual(e.scene.terrain.terrain_levels.tolist(), (tile // 3).tolist())
+    self.assertEqual(e.scene.terrain.terrain_types.tolist(), (tile % 3).tolist())
+    yaw = torch.linspace(-3.14, 3.14, 8)
+    c.robot.data.heading_w.copy_(yaw)
+    for phase in (0, 1, 2):
+      c.profile_step.fill_(phase)
+      c._resample(torch.arange(8))
+      c.compute(0.)
+      self.assertEqual(float(c.command[:, 1:].abs().sum()), 0.)
+      self.assertFalse(bool(c.is_heading_env.any() | c.is_world_env.any()))
+      self.assertTrue(bool((c.command[:, 0] >= c.buckets.lower[bucket, phase % 2, 0]).all()))
+      self.assertTrue(bool((c.command[:, 0] <= c.buckets.upper[bucket, phase % 2, 0]).all()))
+      torch.testing.assert_close(c.robot.data.heading_w, yaw)
+
+  def test_compact_bank_checkpoint_preserves_history_and_next_sampling_draw(self):
+    c, _ = make_command(2, rows=10, terrain_names=("flat", "pyramid_stairs"), subdivisions=2)
+    c.sampler.update(torch.tensor([0, c.bank_size - 1]), torch.tensor([True, False]))
+    saved = c.sgs_state_dict()
+    other, _ = make_command(2, rows=10, terrain_names=("flat", "pyramid_stairs"), subdivisions=2)
+    other.load_sgs_state_dict(saved)
+    torch.testing.assert_close(c.sampler.counts, other.sampler.counts)
+    torch.testing.assert_close(c.sampler.history, other.sampler.history)
+    torch.testing.assert_close(c.sampler.sample(200), other.sampler.sample(200))
 
   def test_manual_joystick_censors_only_the_selected_environment(self):
     c, e = make_command(2)
@@ -501,6 +634,11 @@ class IntegrationTests(unittest.TestCase):
     self.assertEqual(sgs.commands["twist"].sgs.velocity_subdivisions, 2)
     self.assertEqual(sgs.commands["twist"].sgs.relative_error, .6)
     self.assertEqual(play.commands["twist"].sgs.relative_error, .6)
+    self.assertEqual(sgs.commands["twist"].sgs.longitudinal_from_level, 6)
+    for cfg in (sgs, control, play):
+      buckets = make_velocity_buckets(cfg.commands["twist"].ranges)
+      generator = cfg.scene.terrain.terrain_generator
+      self.assertEqual(make_terrain_velocity_bank(generator.num_rows, generator.sub_terrains, buckets).size, 2550)
     self.assertEqual(asdict(sgs.events["reset_base"]), asdict(base.events["reset_base"]))
     self.assertIs(load_runner_cls("Unitree-Go2W-Perceptive-Rough-v2-SGS"), Go2WSGSRunner)
 

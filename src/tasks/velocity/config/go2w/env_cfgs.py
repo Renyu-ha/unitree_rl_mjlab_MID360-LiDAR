@@ -23,7 +23,7 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from src.assets.robots.unitree_go2w.go2w_constants import (
   LEG_ACTION_SCALE, LEG_ACTUATORS, LEG_JOINTS, WHEEL_ACTION_SCALE, WHEEL_ACTUATORS, WHEEL_BODIES,
-  WHEEL_GEOMS, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
+  WHEEL_GEOMS, WHEEL_HALF_WIDTH, WHEEL_JOINTS, WHEEL_RADIUS, WHEEL_SITES, get_go2w_robot_cfg,
 )
 from src.tasks.velocity import mdp
 from src.tasks.velocity.velocity_env_cfg import OffsetGridPatternCfg, make_velocity_env_cfg
@@ -32,6 +32,10 @@ SCAN = {
   "size_x_m": 1.6, "size_y_m": 1.0, "resolution_m": 0.1,
   "x_offset_m": 0.35, "y_offset_m": 0.0,
 }
+
+WHEEL_HEIGHT_SENSORS = (
+  "wheel_height_FL", "wheel_height_FR", "wheel_height_RL", "wheel_height_RR",
+)
 
 # Central square platform side lengths in meters, shared by train and play.
 # V2 also applies to StepUp and Step14. Flat has no generated terrain;
@@ -233,7 +237,8 @@ def _make_go2w_env_cfg(
     cfg.scene.sensors = (terrain_scan, feet_ground_cfg, nonfoot_ground_cfg, self_collision_cfg, mid360)
 
   if stage == "flat":
-    cfg.scene.sensors = (feet_ground_cfg, nonfoot_ground_cfg, self_collision_cfg)
+    # Raw privileged terrain remains available to reward gates, not actor inputs.
+    cfg.scene.sensors = (terrain_scan, feet_ground_cfg, nonfoot_ground_cfg, self_collision_cfg)
 
   # One terrain-only, world-down ray per wheel axle, including the flat task.
   cfg.scene.sensors += (
@@ -266,6 +271,19 @@ def _make_go2w_env_cfg(
       include_geom_groups=(0, 1), exclude_parent_body=True, max_distance=5.0,
     ),
   )
+
+  # Reference SuperMimic queries a complete static height atlas. Our terrain
+  # includes heightfields as well as boxes, so obtain equivalent privileged
+  # surface heights through the native BVH, with rays starting above terrain.
+  cfg.scene.sensors += (RayCastSensorCfg(
+    name="reward_terrain_scan",
+    frame=ObjRef(type="body", name="base_link", entity="robot"),
+    ray_alignment="yaw", include_geom_groups=(0, 1), exclude_parent_body=True,
+    pattern=mdp.ElevatedTerrainGridPatternCfg(
+      size=(2.0, 1.2), resolution=0.1, origin_height=10.0,
+    ),
+    max_distance=30.0, debug_vis=False,
+  ),)
 
   # ------------------------------ Actions ------------------------------
   cfg.actions = {
@@ -492,9 +510,21 @@ def _configure_rewards(
 ) -> None:
   """Declare each active reward once, with its weight and selections together.
 
-  Fixed gait, mandatory clearance, ordinary foot slip and angular momentum are
-  omitted for rolling. Optional second-order action and GRF costs stay disabled.
+  Terrain gates replace unconditional airborne-time/contact and posture terms.
+  Optional second-order action and GRF costs stay disabled.
   """
+  wheel_terrain = {
+    "terrain_sensor_name": "reward_terrain_scan",
+    "asset_cfg": SceneEntityCfg(
+      "robot", joint_names=LEG_JOINTS, site_names=WHEEL_SITES,
+      body_names=WHEEL_BODIES, preserve_order=True,
+    ),
+  }
+  wheel_clearance = {
+    **wheel_terrain, "command_name": "twist",
+    "wheel_sensor_names": WHEEL_HEIGHT_SENSORS,
+    "wheel_radius": WHEEL_RADIUS, "wheel_half_width": WHEEL_HALF_WIDTH,
+  }
   cfg.rewards = {
     # Velocity tracking.
     "track_linear_velocity": RewardTermCfg(
@@ -518,27 +548,22 @@ def _configure_rewards(
       weight=-0.10 if v2 else (-0.04 if perceptive else -0.05),
       params={"asset_cfg": SceneEntityCfg("robot", body_names=("base_link",))},
     ),
-    "pose": RewardTermCfg(
-      func=mdp.variable_posture, weight=0.75,
-      params={
-        "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS),
-        "command_name": "twist", "walking_threshold": 0.1, "running_threshold": 0.5,
-        "std_standing": {
-          r".*(FR|FL|RR|RL)_hip_joint.*": 0.025,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.15,
-          r".*(FR|FL|RR|RL)_calf_joint.*": 0.15,
-        },
-        "std_walking": {
-          r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.25,
-          r".*(FR|FL|RR|RL)_calf_joint.*": 0.35,
-        },
-        "std_running": {
-          r".*(FR|FL|RR|RL)_hip_joint.*": 0.15,
-          r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
-          r".*(FR|FL|RR|RL)_calf_joint.*": 0.45,
-        },
-      },
+    "leg_posture": RewardTermCfg(
+      func=mdp.leg_posture, weight=-0.15, params=deepcopy(wheel_terrain),
+    ),
+    "unnecessary_wheel_lift": RewardTermCfg(
+      func=mdp.unnecessary_wheel_lift, weight=-0.2, params=deepcopy(wheel_clearance),
+    ),
+    "rolling_leg_motion": RewardTermCfg(
+      func=mdp.rolling_leg_motion, weight=-0.12,
+      params={**deepcopy(wheel_terrain), "command_name": "twist"},
+    ),
+    "obstacle_progress": RewardTermCfg(
+      func=mdp.obstacle_progress, weight=0.5,
+      params={**deepcopy(wheel_terrain), "command_name": "twist"},
+    ),
+    "wheel_obstacle_clearance": RewardTermCfg(
+      func=mdp.wheel_obstacle_clearance, weight=-0.25, params=deepcopy(wheel_clearance),
     ),
 
     # Scalar reductions use native selection order. Defaults/limits use the same IDs.
@@ -588,22 +613,6 @@ def _configure_rewards(
         "force_ratio": 3.0, "min_horizontal_force": 1.0,
       },
     ),
-    "wheel_air_time_memory": RewardTermCfg(
-      func=mdp.wheel_air_time_memory, weight=-1.0,
-      params={
-        "sensor_name": "feet_ground_contact",
-        "threshold": 0.7 if stepup else 0.5, "ramp_time": 0.25,
-        "recovery_rate": 1.5,
-      },
-    ),
-    "wheel_contact_bonus": RewardTermCfg(
-      func=mdp.wheel_contact_bonus, weight=0.35,
-      params={
-        "sensor_name": "feet_ground_contact", "force_threshold": 5.0,
-        "command_name": "twist", "command_x_threshold": 0.0,
-        "command_y_cutoff": 0.09, "command_yaw_cutoff": 0.09,
-      },
-    ),
     "wheel_lateral_slide": RewardTermCfg(
       func=mdp.wheel_lateral_slide, weight=-0.75,
       params={
@@ -649,25 +658,25 @@ def _configure_rewards(
     # Failure termination (timeouts are excluded by is_terminated).
     "is_terminated": RewardTermCfg(func=mdp.is_terminated, weight=-200.0),
   }
-  cfg.rewards["dont_wait"] = RewardTermCfg(
-    func=mdp.dont_wait, weight=-0.1,
-    params={"command_name": "twist", "command_threshold": 0.2, "slow_velocity_threshold": 0.15},
-  )
-  cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
-    func=mdp.yaw_rate_l2_when_straight, weight=-0.90,
-    params={"command_name": "twist", "command_x_threshold": 0.1,
-      "command_y_threshold": 0.1, "command_yaw_threshold": 0.1},
-  )
+  # cfg.rewards["dont_wait"] = RewardTermCfg(
+  #   func=mdp.dont_wait, weight=-0.05,
+  #   params={"command_name": "twist", "command_threshold": 0.2, "slow_velocity_threshold": 0.15},
+  # )
+  # cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
+  #   func=mdp.yaw_rate_l2_when_straight, weight=-0.90,
+  #   params={"command_name": "twist", "command_x_threshold": 0.1,
+  #     "command_y_threshold": 0.1, "command_yaw_threshold": 0.1},
+  # )
   cfg.rewards["landing_edge_penalty"] = RewardTermCfg(
     func=mdp.feet_landing_edge_penalty,
     weight=-0.5,
     params={
       "contact_sensor_name": "feet_ground_contact",
-      "terrain_sensor_name": "terrain_scan_mid360",
+      "terrain_sensor_name": "terrain_scan_mid360" if any(s.name=="terrain_scan_mid360" for s in cfg.scene.sensors) else "terrain_scan",
       "command_name": "twist",
       "edge_threshold": 0.06,
       "command_threshold": 0.1,
-      **SCAN,
+      **(SCAN if any(s.name=="terrain_scan_mid360" for s in cfg.scene.sensors) else {**SCAN,"x_offset_m":0.0,"y_offset_m":0.0}),
       "miss_value": 5.0,
       "asset_cfg": SceneEntityCfg(
         "robot", site_names=WHEEL_SITES, preserve_order=True,
@@ -675,12 +684,7 @@ def _configure_rewards(
     },
   )
   if stepup:
-    # StepUp keeps its straight-line stability terms and the shared V2 dont_wait.
-    cfg.rewards["straight_yaw_rate_l2"] = RewardTermCfg(
-      func=mdp.yaw_rate_l2_when_straight, weight=-0.60,
-      params={"command_name": "twist", "command_x_threshold": 0.1,
-        "command_y_threshold": 0.08, "command_yaw_threshold": 0.04},
-    )
+    # Keep the separate heading term; do not re-enable the disabled yaw-rate cost.
     cfg.rewards["straight_heading_drift_l2"] = RewardTermCfg(
       func=mdp.heading_drift_l2_when_straight, weight=-0.85,
       params={"command_name": "twist", "command_x_threshold": 0.1,
@@ -754,8 +758,8 @@ def _configure_perceptive_v2_curriculum(cfg: ManagerBasedRlEnvCfg, *, play: bool
   """Configure the user-tuned V2 command and reward schedules.
 
   terrain_levels is inherited from make_velocity_env_cfg, as it is for G1.
-  Foot-clearance/swing curricula are excluded for rolling. Training reduces
-  pose weight from 0.75 to 0.6 to 0.5; play keeps the configured reward weight.
+  Foot-clearance/swing curricula are excluded for rolling. Terrain-adaptive
+  leg posture keeps its negative cost weight; only tracking weight is scheduled.
   """
   if "command_vel" in cfg.curriculum:
     cfg.curriculum["command_vel"].params["velocity_stages"] = [
@@ -794,17 +798,6 @@ def _configure_perceptive_v2_curriculum(cfg: ManagerBasedRlEnvCfg, *, play: bool
           {"step": 0, "weight": 1.5},
           {"step": 7000 * 24, "weight": 1.35},
           {"step": 14000 * 24, "weight": 1.2},
-        ],
-      },
-    )
-    cfg.curriculum["pose_weight"] = CurriculumTermCfg(
-      func=mdp.reward_weight,
-      params={
-        "reward_name": "pose",
-        "weight_stages": [
-          {"step": 0, "weight": 0.75},
-          {"step": 8000 * 24, "weight": 0.6},
-          {"step": 14000 * 24, "weight": 0.5},
         ],
       },
     )

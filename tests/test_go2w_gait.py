@@ -28,10 +28,10 @@ class Go2WGaitTests(unittest.TestCase):
         cfg, g1, baseline = (load_env_cfg(name, play=play) for name in
                              (TASK, "Unitree-G1-Perceptive-Rough-v2", BASE))
         self.assertEqual(set(cfg.rewards), (set(baseline.rewards) - REMOVED) | RESTORED)
-        self.assertTrue((set(g1.rewards) - {"foot_slip"}) <= set(cfg.rewards))
+        self.assertTrue((set(g1.rewards) - {"foot_slip", "pose", "dont_wait"}) <= set(cfg.rewards))
         self.assertNotIn("foot_slip", cfg.rewards)
         self.assertNotIn("forward_velocity_floor", cfg.rewards)
-        self.assertIs(cfg.rewards["dont_wait"].func, mdp.dont_wait)
+        self.assertNotIn("dont_wait", cfg.rewards)
         for name in g1.rewards.keys() & cfg.rewards.keys():
           self.assertIs(cfg.rewards[name].func, g1.rewards[name].func, name)
         for name in RESTORED:
@@ -61,7 +61,8 @@ class Go2WGaitTests(unittest.TestCase):
         self.assertNotIn("phase", baseline.observations[group].terms)
       for name in RESTORED:
         cfg.rewards.pop(name)
-      for name in REMOVED:
+      # The legacy timeout is optional; restore only terms in the current baseline.
+      for name in REMOVED & baseline.rewards.keys():
         cfg.rewards[name] = deepcopy(baseline.rewards[name])
       for name in ("foot_clearance_weight", "foot_swing_height_weight"):
         cfg.curriculum.pop(name, None)
@@ -72,7 +73,7 @@ class Go2WGaitTests(unittest.TestCase):
         variant.observations["actor"].terms["height_scan"].func = None
       self.assertEqual(asdict(cfg), asdict(baseline))
       untouched = load_env_cfg(BASE, play=play)
-      self.assertTrue(REMOVED <= set(untouched.rewards))
+      self.assertFalse(REMOVED & set(untouched.rewards))
       self.assertFalse(RESTORED & set(untouched.rewards))
     rl, base_rl = asdict(load_rl_cfg(TASK)), asdict(load_rl_cfg(BASE))
     self.assertEqual(rl.pop("run_name"), "v2_gait")

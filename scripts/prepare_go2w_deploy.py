@@ -14,10 +14,12 @@ def main():
   source = parser.add_mutually_exclusive_group(required=True)
   source.add_argument("--checkpoint", type=Path)
   source.add_argument("--onnx", type=Path)
-  parser.add_argument("--task", default="Unitree-Go2W-Perceptive-Rough-v2")
+  parser.add_argument("--task", help="Required with --checkpoint; must match the training task")
   parser.add_argument("--output", required=True, type=Path)
   parser.add_argument("--device", default="cpu")
   args = parser.parse_args()
+  if args.checkpoint and not args.task:
+    parser.error("--checkpoint requires its actual --task; identical tensor widths do not identify a policy")
   if args.output.exists() and any(args.output.iterdir()):
     parser.error("Output directory must be empty; keep hardware configuration in config/config.yaml")
 

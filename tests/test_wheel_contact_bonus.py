@@ -64,15 +64,15 @@ class WheelContactBonusTests(unittest.TestCase):
       0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 1.,
     ]))
 
-  def test_configured_bonus_has_symmetric_straight_command_cutoffs(self):
-    term = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2").rewards["wheel_contact_bonus"]
-    params = dict(term.params, sensor_name="contact")
+  def test_legacy_bonus_has_symmetric_straight_command_cutoffs(self):
+    params = dict(sensor_name="contact", command_name="twist", force_threshold=5.,
+                  command_x_threshold=.1, command_y_cutoff=.02, command_yaw_cutoff=.04)
     env = self.make_env([[30.] * 4] * 10, commands=[
       [.4, 0., 0.], [.4, .019, 0.], [.4, .02, 0.], [.4, -.02, 0.],
       [.4, 0., .039], [.4, 0., .04], [.4, 0., -.04], [.4, .05, .1],
       [.4, .01, .02], [-.4, -.019, -.039],
     ])
-    values = term.func(env, **params) * term.weight
+    values = wheel_contact_bonus(env, **params) * .25
     torch.testing.assert_close(values, torch.tensor([
       .25, .25, 0., 0., .25, 0., 0., 0., .25, .25,
     ]))
@@ -80,12 +80,12 @@ class WheelContactBonusTests(unittest.TestCase):
                                torch.tensor(.5))
 
   def test_lifting_a_wheel_during_a_maneuver_loses_no_contact_bonus(self):
-    term = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2").rewards["wheel_contact_bonus"]
-    params = dict(term.params, sensor_name="contact")
+    params = dict(sensor_name="contact", command_name="twist", force_threshold=5.,
+                  command_x_threshold=.1, command_y_cutoff=.02, command_yaw_cutoff=.04)
     env = self.make_env([[30.] * 4, [30., 30., 30., 0.]] * 2, commands=[
       [.4, 0., 0.], [.4, 0., 0.], [.4, 0., .05], [.4, 0., .05],
     ])
-    torch.testing.assert_close(term.func(env, **params) * term.weight,
+    torch.testing.assert_close(wheel_contact_bonus(env, **params) * .25,
                                torch.tensor([.25, .1875, 0., 0.]))
 
   def test_force_threshold_and_current_contact_filter_light_or_stale_contacts(self):
@@ -136,26 +136,16 @@ class WheelContactBonusTests(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "velocity command"):
       self.reward(env)
 
-  def test_all_go2w_variants_reward_support_using_world_net_force(self):
+  def test_go2w_disables_contact_bonus_but_keeps_force_sensor(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-"):
         continue
       for play in (False, True):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
-          if task.endswith("-Gait"):
-            self.assertNotIn("wheel_contact_bonus", cfg.rewards)
-            continue
-          term = cfg.rewards["wheel_contact_bonus"]
-          self.assertIs(term.func, wheel_contact_bonus)
-          self.assertEqual(term.weight, .25)
-          self.assertEqual(term.params, {
-            "sensor_name": "feet_ground_contact", "force_threshold": 5.,
-            "command_name": "twist", "command_x_threshold": .1,
-            "command_y_cutoff": .02, "command_yaw_cutoff": .04,
-          })
+          self.assertNotIn("wheel_contact_bonus", cfg.rewards)
           sensor = next(sensor for sensor in cfg.scene.sensors
-                        if sensor.name == term.params["sensor_name"])
+                        if sensor.name == "feet_ground_contact")
           self.assertEqual(sensor.reduce, "netforce")
           self.assertEqual(sensor.num_slots, 1)
           self.assertEqual(sensor.fields, ("found", "force"))

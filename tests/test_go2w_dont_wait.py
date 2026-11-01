@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 import torch
-from mjlab.managers.reward_manager import RewardManager
+from mjlab.managers.reward_manager import RewardManager, RewardTermCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import src.tasks  # noqa: F401 -- register task variants
@@ -58,16 +58,16 @@ class DontWaitTests(unittest.TestCase):
     env = self.make_env(commands, [[x, y, 0.] for x, y, _ in commands])
     torch.testing.assert_close(dont_wait(env, "twist"), torch.zeros(len(commands)))
 
-  def test_configured_reward_manager_applies_negative_weight_and_control_dt(self):
-    cfg = load_env_cfg("Unitree-Go2W-Perceptive-Rough-v2")
+  def test_legacy_reward_manager_applies_negative_weight_and_control_dt(self):
     env = self.make_env([[.4, 0., 0.]] * 4, [[.3, 0., 0.], [0., 0., 0.],
                                                [-.1, 0., 0.], [-.3, 0., 0.]])
-    manager = RewardManager({"dont_wait": cfg.rewards["dont_wait"]}, env)
+    manager = RewardManager({"dont_wait": RewardTermCfg(func=dont_wait, weight=-.1,
+      params={"command_name": "twist"})}, env)
     torch.testing.assert_close(manager.compute(dt=.02), torch.tensor([0., -.002, -.004, -.006]))
 
 
 class Go2WDontWaitConfigTests(unittest.TestCase):
-  def test_all_v2_variants_replace_the_floor_in_train_and_play(self):
+  def test_all_v2_variants_disable_dont_wait_and_keep_obstacle_progress(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-Perceptive-Rough-v2"):
         continue
@@ -75,12 +75,9 @@ class Go2WDontWaitConfigTests(unittest.TestCase):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
           self.assertNotIn("forward_velocity_floor", cfg.rewards)
-          reward = cfg.rewards["dont_wait"]
-          self.assertIs(reward.func, dont_wait)
-          self.assertEqual(reward.weight, -.1)
-          self.assertEqual(reward.params, {
-            "command_name": "twist", "command_threshold": .2, "slow_velocity_threshold": .15,
-          })
+          self.assertNotIn("dont_wait", cfg.rewards)
+          self.assertNotIn("straight_yaw_rate_l2", cfg.rewards)
+          self.assertIn("obstacle_progress", cfg.rewards)
           self.assertIn("track_linear_velocity", cfg.rewards)
           self.assertEqual(cfg.observations["actor"].history_length, 3)
 
@@ -91,6 +88,10 @@ class Go2WDontWaitConfigTests(unittest.TestCase):
         with self.subTest(task=task, play=play):
           rewards = load_env_cfg(task, play=play).rewards
           self.assertNotIn("forward_velocity_floor", rewards)
+          if task.startswith("Unitree-Go2W-"):
+            self.assertNotIn("dont_wait", rewards)
+            self.assertNotIn("straight_yaw_rate_l2", rewards)
+            continue
           self.assertIs(rewards["dont_wait"].func, dont_wait)
           self.assertEqual(rewards["dont_wait"].weight, -.1)
           self.assertEqual(rewards["dont_wait"].params, {

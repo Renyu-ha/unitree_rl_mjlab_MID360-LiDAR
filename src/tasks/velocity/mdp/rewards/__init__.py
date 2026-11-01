@@ -3,3 +3,4 @@
 from .locomotion import *  # noqa: F403
 from .smoothness import *  # noqa: F403
 from .wheel import *  # noqa: F403
+from .terrain_aware import *  # noqa: F403

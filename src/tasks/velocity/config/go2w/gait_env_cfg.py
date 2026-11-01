@@ -1,9 +1,9 @@
-"""Isolated V2 comparison: restore G1 rewards, excluding ordinary foot slip.
+"""Isolated V2 comparison: restore G1 gait rewards, excluding ordinary foot slip.
 
-The original Go2W builder, task factories and PPO settings remain the baseline.
-Only this variant removes the custom air-time/contact-bonus rewards. Restored
-reward weights, height targets and curricula start from this repository's G1 V2.
-The command-directed dont_wait reward is shared with the other locomotion tasks.
+The shared terrain-aware Go2W builder and PPO settings remain the baseline.
+Restored reward weights, height targets and curricula start from G1 V2, while
+the default-pose term uses Go2W's terrain-adaptive leg posture.
+The shared Go2W anti-stall and straight-yaw-rate costs are currently disabled.
 """
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -33,9 +33,6 @@ def unitree_go2w_perceptive_gait_env_cfg(play: bool = False) -> ManagerBasedRlEn
   )
 
   # ------------------------------ Rewards ------------------------------
-  cfg.rewards.pop("wheel_air_time_timeout", None)
-  cfg.rewards.pop("wheel_air_time_memory")
-  cfg.rewards.pop("wheel_contact_bonus")
   cfg.rewards["angular_momentum"] = RewardTermCfg(
     func=mdp.angular_momentum_penalty, weight=-0.035,
     params={"sensor_name": "robot/root_angmom"},

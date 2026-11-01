@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 
 import torch
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 from mjlab.tasks.velocity.mdp.velocity_command import (
   UniformVelocityCommandCfg as NativeCommandCfg,
@@ -15,6 +16,8 @@ import src.tasks  # noqa: F401
 from src.tasks.velocity.mdp.deadzone_velocity_command import (
   DeadzoneVelocityCommand, DeadzoneVelocityCommandCfg,
 )
+from src.tasks.velocity.mdp.rewards.locomotion import stand_still
+from src.tasks.velocity.mdp.rewards.wheel import wheel_stand_still
 
 
 class DeadzoneVelocityCommandTests(unittest.TestCase):
@@ -48,6 +51,25 @@ class DeadzoneVelocityCommandTests(unittest.TestCase):
     torch.testing.assert_close(command.command, torch.tensor([
       [-.1001, .1, 0.], [.1, -.1, 0.], [0., 0., 0.], [0., .4, -.4],
     ]))
+
+  def test_standing_rewards_do_not_treat_threshold_commands_as_standing(self):
+    command = self.make_command(num_envs=9)
+    command.vel_command_b[:] = torch.tensor([
+      [0., 0., 0.], [.0999, -.0999, .0999],
+      [.1, 0., 0.], [-.1, 0., 0.], [0., .1, 0.], [0., -.1, 0.],
+      [0., 0., .1], [0., 0., -.1], [.1, -.1, .1],
+    ])
+    command._apply_deadzone(slice(None))
+    env = command._env
+    env.command_manager = SimpleNamespace(get_command=lambda name: command.command)
+    data = env.scene["robot"].data
+    data.joint_pos = torch.full((9, 2), .2)
+    data.default_joint_pos = torch.zeros(9, 2)
+    data.joint_vel = torch.ones(9, 2)
+    asset_cfg = SceneEntityCfg("robot")
+    standing = torch.tensor([1., 1., 0., 0., 0., 0., 0., 0., 0.])
+    torch.testing.assert_close(stand_still(env, "twist", asset_cfg=asset_cfg), standing * .08)
+    torch.testing.assert_close(wheel_stand_still(env, "twist", asset_cfg), standing * 2.)
 
   def test_resampling_matches_native_random_state_and_all_mode_assignments(self):
     options = dict(heading_command=True, rel_heading_envs=.7, rel_standing_envs=.2,

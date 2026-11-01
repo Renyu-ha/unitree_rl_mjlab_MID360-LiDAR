@@ -68,11 +68,15 @@ def deployment_config(env, metadata):
   scan_term = actor.terms.get("height_scan")
   memory = scan_term is not None and "mid360_sensor_name" in scan_term.params
   scan_params = scan_term.params if memory else {}
+  pattern = env.scene[scan_term.params["sensor_name"]].cfg.pattern if scan_term is not None else None
+  size = pattern.size if pattern is not None else (1.6, 1.0)
+  resolution = float(pattern.resolution) if pattern is not None else 0.1
   scan = dict(
-    size_x_m=1.6, size_y_m=1.0, resolution_m=0.1,
-    x_offset_m=float(scan_params.get("x_offset_m", 0.0)),
-    y_offset_m=float(scan_params.get("y_offset_m", 0.0)),
+    size_x_m=float(size[0]), size_y_m=float(size[1]), resolution_m=resolution,
+    x_offset_m=float(scan_params.get("x_offset_m", getattr(pattern, "x_offset", 0.0))),
+    y_offset_m=float(scan_params.get("y_offset_m", getattr(pattern, "y_offset", 0.0))),
     miss_value_m=5.0, memory_max_age_s=float(scan_params.get("memory_max_age_s", 0.0)),
+    memory_shift=bool(scan_params.get("enable_memory_shift", False)),
     mask_visible=memory,
     visible_x_min_m=float(scan_params.get("visible_x_min_m", -10.0)),
     visible_x_max_m=float(scan_params.get("visible_x_max_m", 10.0)),
@@ -81,16 +85,17 @@ def deployment_config(env, metadata):
   # Persist the exact training-device mask. Float32 values on the visibility
   # boundary can otherwise select a different column in C++/other devices.
   import torch
-  x = torch.arange(17, device=env.device, dtype=torch.float32)*0.1 - 0.8 + scan["x_offset_m"]
-  y = torch.arange(11, device=env.device, dtype=torch.float32)*0.1 - 0.5 + scan["y_offset_m"]
+  x = torch.arange(round(size[0]/resolution)+1, device=env.device, dtype=torch.float32)*resolution - size[0]/2 + scan["x_offset_m"]
+  y = torch.arange(round(size[1]/resolution)+1, device=env.device, dtype=torch.float32)*resolution - size[1]/2 + scan["y_offset_m"]
   gx, gy = torch.meshgrid(x, y, indexing="xy")
   visible = (gx >= scan["visible_x_min_m"]) & (gx <= scan["visible_x_max_m"]) & (gy.abs() <= scan["visible_y_abs_m"])
   scan["visible_mask"] = (visible if memory else torch.ones_like(visible)).flatten().int().cpu().tolist()
+  ranges = env.command_manager.get_term("twist").cfg.ranges
   return dict(
     go2w_deploy_schema=1, joint_ids_map=SDK_IDS, action_joint_names=names,
     step_dt=float(env.step_dt), observation_dim=observation_dim,
-    stiffness=kp, damping=kd, default_joint_pos=default,
-    commands={"base_velocity": {"ranges": {"lin_vel_x": [-0.2, 0.3], "lin_vel_y": [-0.15, 0.15], "ang_vel_z": [-0.3, 0.3]}}},
+    stiffness=kp, damping=kd, gain_order="sdk_motor", default_joint_pos=default,
+    commands={"base_velocity": {"ranges": {axis: list(getattr(ranges, axis)) for axis in ("lin_vel_x", "lin_vel_y", "ang_vel_z")}}},
     actions=actions, observations=observations,
     perception_required=scan_term is not None, height_scan=scan,
   )

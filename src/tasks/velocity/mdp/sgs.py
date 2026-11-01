@@ -15,6 +15,9 @@ class SGSConfig:
   adaptive: bool = True
   bank_seed: int = 20261030
   velocity_subdivisions: int = 2
+  # Non-flat row threshold; None keeps other terrain omnidirectional. Stairs
+  # remain body-longitudinal at every level regardless of this threshold.
+  longitudinal_from_level: int | None = 6
   history_length: int = 32
   group_prior_strength: float = 4.0
   target_success: float = 0.66
@@ -33,6 +36,8 @@ class SGSConfig:
   def validate(self):
     if self.velocity_subdivisions < 1 or self.history_length < 1 or self.bank_seed < 0:
       raise ValueError("SGS requires positive subdivisions/history and a nonnegative seed")
+    if self.longitudinal_from_level is not None and self.longitudinal_from_level < 0:
+      raise ValueError("SGS longitudinal_from_level must be nonnegative or None")
     if not 0 <= self.target_success <= 1 or not 0 <= self.uniform_mix <= 1:
       raise ValueError("SGS target_success and uniform_mix must lie in [0, 1]")
     for name in ("concentration", "settle_s", "group_prior_strength"):
@@ -47,7 +52,7 @@ class SGSConfig:
 
 
 class SuccessGuidedSampler:
-  def __init__(self, size: int, cfg: SGSConfig, device="cpu", seed=0, *, group_ids=None):
+  def __init__(self, size: int, cfg: SGSConfig, device="cpu", seed=0, *, group_ids=None, base_probs=None):
     cfg.validate()
     if size < 1:
       raise ValueError("SGS bank cannot be empty")
@@ -70,6 +75,12 @@ class SuccessGuidedSampler:
       # Equal mass per terrain/category, then uniform within its speed sub-bins.
       # Standing has one bin, so it is not diluted by subdividing moving tasks.
       self.base_probs = 1.0 / (counts.numel() * counts[groups].float())
+    if base_probs is not None:
+      base = torch.as_tensor(base_probs, device=device, dtype=torch.float32)
+      if (base.shape != (size,) or not bool(torch.isfinite(base).all()) or bool((base <= 0).any())
+          or not bool(torch.isclose(base.sum(), base.new_tensor(1.0)))):
+        raise ValueError("SGS base probabilities must be positive, finite and sum to one")
+      self.base_probs = base.detach().clone()
 
   def rates(self):
     n = self.counts.clamp(max=self.cfg.history_length)
@@ -123,6 +134,7 @@ class SuccessGuidedSampler:
     return {"settings": asdict(self.cfg), "history": self.history.detach().cpu().clone(),
       "counts": self.counts.detach().cpu().clone(), "rng": self.generator.get_state().cpu().clone(),
       "groups": None if self.group_ids is None else self.group_ids.cpu().clone(),
+      "base_probs": self.base_probs.detach().cpu().clone(),
       "parent": None if self.parent is None else self.parent.state_dict()}
 
   def load_state_dict(self, state):
@@ -132,6 +144,9 @@ class SuccessGuidedSampler:
     if (groups is None) != (self.group_ids is None) or (
         groups is not None and not torch.equal(groups.cpu(), self.group_ids.cpu())):
       raise ValueError("SGS checkpoint groups differ")
+    base = state.get("base_probs")
+    if base is None or not torch.equal(base.cpu(), self.base_probs.cpu()):
+      raise ValueError("SGS checkpoint base sampling distribution differs")
     history, counts = state["history"], state["counts"]
     if counts.shape != self.counts.shape or bool((counts < 0).any()):
       raise ValueError("Invalid SGS checkpoint counters")

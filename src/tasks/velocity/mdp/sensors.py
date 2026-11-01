@@ -2,9 +2,27 @@
 
 from dataclasses import dataclass
 
-from mjlab.sensor import ContactSensor, ContactSensorCfg
+from mjlab.sensor import ContactSensor, ContactSensorCfg, GridPatternCfg
 
-__all__ = ["OrderedContactSensorCfg"]
+__all__ = ["ElevatedTerrainGridPatternCfg", "OrderedContactSensorCfg"]
+
+
+@dataclass(kw_only=True)
+class ElevatedTerrainGridPatternCfg(GridPatternCfg):
+  """Privileged ground truth from above terrain, independent of body clearance.
+
+  Yaw-aligned rays keep this Z offset vertical. Unlike actor scans, these rays
+  can see the top of an obstacle taller than their attached robot body.
+  """
+
+  origin_height: float = 10.0
+
+  def generate_rays(self, mj_model, device):
+    if self.origin_height <= 0:
+      raise ValueError("Terrain ground-truth ray height must be positive")
+    offsets, directions = super().generate_rays(mj_model, device)
+    offsets[:, 2] += self.origin_height
+    return offsets, directions
 
 
 class OrderedContactSensor(ContactSensor):

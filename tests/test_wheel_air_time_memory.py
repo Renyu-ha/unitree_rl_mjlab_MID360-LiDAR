@@ -147,25 +147,17 @@ class WheelAirTimeMemoryTests(unittest.TestCase):
     with self.assertRaises(ValueError):
       self.cost(term, env)
 
-  def test_all_go2w_variants_keep_original_timeout_and_add_only_time_record_parameters(self):
+  def test_all_go2w_variants_disable_unconditional_air_time_constraints(self):
     for task in list_tasks():
       if not task.startswith("Unitree-Go2W-"):
         continue
       for play in (False, True):
         with self.subTest(task=task, play=play):
           cfg = load_env_cfg(task, play=play)
-          if task.endswith("-Gait"):
-            self.assertNotIn("wheel_air_time_memory", cfg.rewards)
-            continue
-          term = cfg.rewards["wheel_air_time_memory"]
-          self.assertIs(term.func, wheel_air_time_memory)
-          self.assertEqual(term.weight, -.25)
-          self.assertEqual(term.params, {
-            "sensor_name": "feet_ground_contact", "threshold": .7 if "StepUp" in task else .5,
-            "ramp_time": .25, "recovery_rate": 2.,
-          })
-          self.assertIs(cfg.rewards["wheel_air_time_timeout"].func, wheel_air_time_timeout)
+          self.assertNotIn("wheel_air_time_memory", cfg.rewards)
+          self.assertNotIn("wheel_air_time_timeout", cfg.rewards)
           self.assertNotIn("wheel_air_time_imbalance", cfg.rewards)
+          self.assertIn("unnecessary_wheel_lift", cfg.rewards)
 
 
 if __name__ == "__main__":
